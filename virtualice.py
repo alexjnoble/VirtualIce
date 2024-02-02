@@ -2,6 +2,8 @@
 #
 # Author: Alex J. Noble with help from GPT4, 2023-24 @SEMC, under the MIT License
 #
+# VirtualIce: Synthetic CryoEM Micrograph Generator
+#
 # This script generates synthetic cryoEM micrographs given a list of noise micrographs and
 # their corresponding defoci and PBD ids. It is intended that the noise micrographs are cryoEM
 # images of buffer.
@@ -10,6 +12,9 @@
 #
 # This program depends on EMAN2 to function properly. Users must separately
 # install EMAN2 to use this program.
+
+# If the user wishes to output IMOD coordinate files, then IMOD needs to be
+# installed separately.
 #
 # EMAN2 is distributed under a dual license - BSD-3-Clause and GPL-2.0.
 # For the details of EMAN2's licensing, please refer to:
@@ -19,7 +24,12 @@
 # You can obtain the EMAN2 source code from its official GitHub repository:
 # https://github.com/cryoem/eman2
 #
-# Please ensure compliance with EMAN2's license terms when obtaining and using it.
+# IMOD is distributed under GPL-2.0. For details, see the link above.
+#
+# You can obtain the IMOD source code and packages from its official website:
+# https://bio3d.colorado.edu/imod/
+#
+# Ensure compliance with EMAN2's and IMOD's license terms when obtaining and using them.
 __version__ = "1.0.0"
 
 import os
@@ -167,28 +177,35 @@ def writemrc(mrc_path, numpy_array):
     
     return
 
-def write_star_header(file_basename):
+def write_star_header(file_basename, apix, voltage, cs):
     """
     Write the header for a .star file.
 
     :param str file_basename: The basename of the file to which the header should be written.
     """
-    with open('%s.star' % file_basename, 'a') as the_file:
-        the_file.write('\n')
+    with open('%s.star' % file_basename, 'w') as the_file:
+        the_file.write('\ndata_\n\n')
+        the_file.write('loop_\n')
+        the_file.write('_rlnVersion #1\n')
+        the_file.write('3.1\n\n')  # Ensure compatibility with RELION 3.1 or newer
         the_file.write('data_optics\n')
         the_file.write('\n')
         the_file.write('loop_\n')
-        the_file.write('_rlnOpticsGroup #1\n')
-        the_file.write('_rlnImageDimensionality #2\n')
-        the_file.write('1 2\n')
-        the_file.write('\n')
+        the_file.write('_rlnOpticsGroupName #1\n')
+        the_file.write('_rlnOpticsGroup #2\n')
+        the_file.write('_rlnMicrographPixelSize #3\n')
+        the_file.write('_rlnVoltage #4\n')
+        the_file.write('_rlnSphericalAberration #5\n')
+        the_file.write('_rlnAmplitudeContrast #6\n')
+        the_file.write('_rlnImageDimensionality #7\n')
+        the_file.write('opticsGroup1 1 %f %f %f 0.1 2\n\n' % (apix, voltage, cs))
         the_file.write('data_particles\n')
         the_file.write('\n')
         the_file.write('loop_\n')
         the_file.write('_rlnMicrographName #1\n')
         the_file.write('_rlnCoordinateX #2\n')
         the_file.write('_rlnCoordinateY #3\n')
-        the_file.write('_rlnPhaseShift #4\n')
+        the_file.write('_rlnAnglePsi #4\n')
         the_file.write('_rlnOpticsGroup #5\n')
 
 def add_to_star(pdb_name, image_path, x_shift, y_shift):
@@ -864,7 +881,7 @@ def blend_images(large_image, small_images, particle_locations, scale, pdb_name,
         # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
         filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
         num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-        removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]
+        #removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]  # Makes a list of particles that were removed
         print(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.")
     else:
         print(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}")
@@ -886,7 +903,7 @@ def blend_images(large_image, small_images, particle_locations, scale, pdb_name,
     # Make an Imod .mod coordinates file if requested
     if imod_coordinate_file:
         write_mod_file(filtered_particle_locations, os.path.splitext(image_path)[0] + ".mod")
-        write_mod_file(removed_particles, os.path.splitext(image_path)[0] + "r.mod")
+        #write_mod_file(removed_particles, os.path.splitext(image_path)[0] + "_removed.mod")  # Writes the particles that were removed
 
     # Make a .coord coordinates file if requested
     if coord_coordinate_file:
@@ -948,7 +965,7 @@ def add_images(large_image_path, small_images, pdb_id, border_distance, scale, o
 
     return len(particle_locations)
 
-def generate_micrographs(pdb_id, args):
+def generate_micrographs(pdb_id, args, pdb_index, total_pdbs):
     """
     Generate synthetic micrographs for a specified PDB ID.
 
@@ -978,22 +995,24 @@ def generate_micrographs(pdb_id, args):
     print_verbose(f"Calculated mass for PDB {pdb_id}: {mass} kDa", args.verbosity)
     
     # Write STAR header for the current synthetic dataset
-    write_star_header(pdb_id)
+    write_star_header(pdb_id, args.apix, args.voltage, args.Cs)
     
     # Shuffle ice images
     selected_images = shuf_images(args.num_images, args.image_list_file, args.verbosity)
     
     # Main Loop
     total_num_particles = 0
+    current_micrograph_number = 0
     for line in selected_images:
+        current_micrograph_number += 1
         # Parse the 'micrograph_name.mrc defocus' line
         fields = line.strip().split()
         fname, defocus = fields[0], fields[1]
         
-        extra_hyphens = '-' * len(fname)
-        print_verbose(f"\n----------------------------------------{extra_hyphens}", args.verbosity)
-        print_verbose(f"Generating synthetic micrograph from {fname}...", args.verbosity)
-        print_verbose(f"----------------------------------------{extra_hyphens}\n", args.verbosity)
+        extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(pdb_index)) + len(str(total_pdbs)) + len(str(fname)))
+        print_verbose(f"\n-----------------------------------------------------------{extra_hyphens}", args.verbosity)
+        print_verbose(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {pdb_id} ({pdb_index + 1}/{total_pdbs}) from {fname}...", args.verbosity)
+        print_verbose(f"-----------------------------------------------------------{extra_hyphens}\n", args.verbosity)
         
         # Random ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are completely inversely named just so the user gets a number that feels right)
@@ -1205,10 +1224,11 @@ def main():
     print("-----------------------------------------------------------------------------------------------\n")
 
     # Loop over each provided PDB ID. Skip a PDB if it doesn't download
+    total_pdbs = len(args.pdbs)
     total_number_of_particles = 0
-    for pdb_id in args.pdbs:
+    for pdb_index, pdb_id in enumerate(args.pdbs):
         if download_pdb(pdb_id, args.verbosity):
-            number_of_particles = generate_micrographs(pdb_id, args)
+            number_of_particles = generate_micrographs(pdb_id, args, pdb_index, total_pdbs)
             total_number_of_particles += number_of_particles
         else:
             print_verbose(f"Skipping {pdb_id} due to download failure.\n", args.verbosity)
@@ -1216,7 +1236,16 @@ def main():
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.pdbs)
-    print(f"\nTotal time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} with a total of {total_number_of_particles} particles: {time_str}\n")
+    print(f"\nTotal time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_pdbs} PDBs with a total of {total_number_of_particles} particles: {time_str}\n")
+    
+    print("One .star file per pdb can be found in the run directories.\n")
+    
+    if args.imod_coordinate_file:
+        print("To open a micrograph with an IMOD coordinate file, run a command of this form:")
+        print("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files.)\n")
+    
+    if args.coord_coordinate_file:
+        print("One (x y) .coord file per micrograph can be found in the run directories.\n")
     
 if __name__ == "__main__":
     main()
