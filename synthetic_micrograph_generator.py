@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 #
-# Author: Alex J. Noble with help from GPT4, May-October 2023 @SEMC, under the MIT License
+# Author: Alex J. Noble with help from GPT4, 2023-24 @SEMC, under the MIT License
 #
 # This script generates synthetic cryoEM micrographs given a list of noise micrographs and
 # their corresponding defoci and PBD ids. It is intended that the noise micrographs are cryoEM
 # images of buffer.
-# Requirements: EMAN2 installation (specifically e2pdb2mrc.py, e2project3d.py, and e2proc2d.py)
-#               pip install mrcfile numpy scipy
+# Dependencies: EMAN2 installation (specifically e2pdb2mrc.py, e2project3d.py, and e2proc2d.py)
+#               pip install mrcfile numpy scipy matplotlib cv2
 #
 # This program depends on EMAN2 to function properly. Users must separately
 # install EMAN2 to use this program.
@@ -23,6 +23,7 @@
 __version__ = "1.0.0"
 
 import os
+import cv2
 import glob
 import json
 import time
@@ -38,6 +39,7 @@ from datetime import timedelta
 from matplotlib.path import Path
 from multiprocessing import Pool
 from urllib import request, error
+from scipy.ndimage import gaussian_filter
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
 def check_num_particles(value):
@@ -120,6 +122,91 @@ def download_pdb(pdb_id, verbosity):
     except Exception as e:
         print_verbose(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", verbosity)
         return False
+
+def pdb_to_mrc(pdb_filename, mrc_filename, voxel_size, resolution, margin=5):
+    """
+    Convert a PDB file to an MRC file.
+    
+    :param pdb_filename: Path to the input PDB file.
+    :param mrc_filename: Path to save the output MRC file.
+    :param voxel_size: Desired voxel size of the MRC file in Angstroms.
+    :param resolution: Desired resolution of the MRC file in Angstroms.
+    :param margin: Additional margin to add around the protein in the grid.
+    """
+    # Define atomic weights and radii
+    ATOM_DATA = {
+        'H': {'radius': 1.20, 'mass': 1.008},
+        'C': {'radius': 1.70, 'mass': 12.01},
+        'N': {'radius': 1.55, 'mass': 14.01},
+        'O': {'radius': 1.52, 'mass': 16.00},
+        'S': {'radius': 1.80, 'mass': 32.07},
+        'P': {'radius': 1.80, 'mass': 30.97},
+        'Na': {'radius': 2.27, 'mass': 22.99},
+        'Mg': {'radius': 1.73, 'mass': 24.31},
+        'Cl': {'radius': 1.75, 'mass': 35.45},
+        'K': {'radius': 2.75, 'mass': 39.10}, 
+        'Ca': {'radius': 2.31, 'mass': 40.08},
+        'Fe': {'radius': 2.00, 'mass': 55.85},
+        'Zn': {'radius': 1.39, 'mass': 65.38},
+        'Se': {'radius': 1.90, 'mass': 78.96},
+        'Br': {'radius': 1.85, 'mass': 79.90},
+        'I': {'radius': 1.98, 'mass': 126.90},
+        'F': {'radius': 1.47, 'mass': 18.998},
+        'Cu': {'radius': 1.4, 'mass': 63.546},
+        'Mn': {'radius': 1.79, 'mass': 54.938},
+        'Co': {'radius': 1.70, 'mass': 58.933},
+        'Ni': {'radius': 1.62, 'mass': 58.693}
+    }
+    # Read all atoms from the pdb
+    atoms = []
+    with open(pdb_filename, 'r') as file:
+        for line in file:
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                x = float(line[30:38].strip())
+                y = float(line[38:46].strip())
+                z = float(line[46:54].strip())
+                element = line[76:78].strip()
+                atoms.append((x, y, z, element))
+    
+    # Determine boundaries
+    xs, ys, zs, _ = zip(*atoms)
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    min_z, max_z = min(zs), max(zs)
+    
+    # Calculate grid size and make it cubic
+    grid_size = np.ceil(np.array([max_x - min_x, max_y - min_y, max_z - min_z]) / voxel_size).astype(int) + 2 * margin
+    max_size = np.max(grid_size)
+
+    # Create an empty grid
+    grid = np.zeros((max_size, max_size, max_size), dtype=np.float32)
+    
+    center = (np.array([min_x, min_y, min_z]) + np.array([max_x, max_y, max_z])) / 2.0
+    
+    # Populate the grid with atomic densities
+    for x, y, z, element in atoms:
+        atom_data = ATOM_DATA.get(element, ATOM_DATA['C'])  # Default to carbon if element not found
+        radius = atom_data['radius']
+        mass = atom_data['mass']
+        
+        # Convert coordinates to grid
+        x, y, z = ((np.array([x, y, z]) - center) / voxel_size) + grid_size / 2.0
+        
+        # Populate the grid within the atom's radius with its mass
+        for dx in range(int(-radius), int(radius) + 1):
+            for dy in range(int(-radius), int(radius) + 1):
+                for dz in range(int(-radius), int(radius) + 1):
+                    if dx**2 + dy**2 + dz**2 <= radius**2:
+                        grid[int(x)+dx, int(y)+dy, int(z)+dz] += mass
+        
+    # Apply Gaussian smoothing based on the resolution SIGMA IS BROKEN
+    sigma = resolution / voxel_size
+    #sigma = resolution / (2 * np.sqrt(2 * np.log(2)))
+    grid = gaussian_filter(grid, sigma=sigma)
+    
+    # Save as MRC file
+    with mrcfile.new(mrc_filename, overwrite=True) as mrc:
+        mrc.set_data(grid)
 
 def convert_pdb_to_mrc(pdb_id, apix, res, verbosity):
     """
@@ -260,16 +347,16 @@ def write_coord_file(coordinates, output_file):
         for x, y in coordinates:
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
 
-def read_polygons_from_json(json_file_path, flip_x=False, flip_y=False, expand=True, expansion_distance=15):
+def read_polygons_from_json(json_file_path, expansion_distance, flip_x=False, flip_y=False, expand=True):
     """
     Read polygons from a JSON file generated by Anylabeling, optionally flip the coordinates,
     and optionally expand each polygon.
     
     :param json_file_path: Path to the JSON file.
+    :param expansion_distance: Distance by which to expand the polygons.
     :param flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param flip_y: Boolean to determine if the y-coordinates should be flipped.
     :param expand: Boolean to determine if the polygons should be expanded.
-    :param expansion_distance: Distance by which to expand the polygons.
     :return: List of polygons where each polygon is a list of (x, y) coordinates.
     """
     polygons = []
@@ -374,7 +461,7 @@ def next_divisible_by_primes(number, primes, count):
     return min(least_common_multiples)
 
 def fourier_crop(image, downsample_factor):
-    """
+    """	
     Fourier crops a 2D image.
 
     :param numpy.ndarray image: Input 2D image to be Fourier cropped.
@@ -421,6 +508,7 @@ def fourier_crop(image, downsample_factor):
 def downsample_micrograph(image_path, downsample_factor):
     """
     Downsample a micrograph by Fourier cropping and save it to a temporary directory.
+    Supports mrc, png, and jpeg formats.
 
     :param str image_path: Path to the micrograph image file.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
@@ -428,7 +516,16 @@ def downsample_micrograph(image_path, downsample_factor):
     :return: None
     """
     try:
-        image = readmrc(image_path)
+        # Determine the file format
+        filename = os.path.basename(image_path)
+        name, ext = os.path.splitext(filename)
+        if ext == '.mrc':
+            image = readmrc(image_path)
+        elif ext in ['.png', '.jpeg']:
+            image = cv2.imread(image_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply downsampling
         downsampled_image = fourier_crop(image, downsample_factor)
         
         # Create a bin directory to store the downsampled micrograph
@@ -436,10 +533,16 @@ def downsample_micrograph(image_path, downsample_factor):
         os.makedirs(bin_dir, exist_ok=True)
         
         # Save the downsampled micrograph with the same name plus _bin## in the binned directory
-        filename = os.path.basename(image_path)
-        name, ext = os.path.splitext(filename)
         binned_image_path = os.path.join(bin_dir, f"{name}_bin{downsample_factor}{ext}")
-        writemrc(binned_image_path, downsampled_image)
+        if ext == '.mrc':
+            writemrc(binned_image_path, ((downsampled_image - np.mean(downsampled_image)) / np.std(downsampled_image)))  # Save image with 0 mean and std of 1
+        elif ext in ['.png', '.jpeg']:
+            # Normalize image to [0, 255] and convert to uint8
+            downsampled_image -= downsampled_image.min()
+            downsampled_image = downsampled_image / downsampled_image.max() * 255.0
+            downsampled_image = downsampled_image.astype(np.uint8)
+            cv2.imwrite(binned_image_path, downsampled_image)
+                
     except Exception as e:
         print(f"Error processing {image_path}: {str(e)}")
 
@@ -447,12 +550,13 @@ def parallel_downsample(image_directory, cpus, downsample_factor):
     """
     Downsample all micrographs in a directory in parallel.
 
-    :param str image_directory: Local directory name where the micrographs are stored in mrc format.
+    :param str image_directory: Local directory name where the micrographs are stored in mrc, png, and/or jpeg formats.
     :param int downsample_factor: Factor by which to downsample the images in both dimensions.
 
     :return: None
     """
-    image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if filename.endswith(".mrc")]
+    image_extensions = ['.mrc', '.png', '.jpeg']
+    image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
     # Create a pool of worker processes
     pool = Pool(processes=cpus)
@@ -586,16 +690,20 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
     
     return rand_num_particles, max_num_particles
 
-def filter_coordinates_outside_polygons(particle_locations, polygons):
+def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons):
     """
     Filters out particle locations that are inside any polygon.
     
     :param particle_locations: List of (x, y) coordinates of particle locations.
+    :param json_scale: Binning factor used when labeling junk to create the json file.
     :param polygons: List of polygons where each polygon is a list of (x, y) coordinates.
     :return: List of (x, y) coordinates of particle locations that are outside the polygons.
     """
     # An empty list to store particle locations that are outside the polygons
     filtered_particle_locations = []
+    
+    # Scale particle locations us to the proper image size
+    particle_locations = [(float(x)/json_scale, float(y)/json_scale) for x, y in particle_locations]
     
     # Iterate over each particle location
     for x, y in particle_locations:
@@ -612,7 +720,10 @@ def filter_coordinates_outside_polygons(particle_locations, polygons):
         # If the point is not inside any polygon, add it to the filtered list
         if not inside_any_polygon:
             filtered_particle_locations.append((x, y))
-            
+    
+    # Scale filtered particle locations back up
+    filtered_particle_locations = [(float(x) * json_scale, float(y) * json_scale) for x, y in filtered_particle_locations]
+    
     return filtered_particle_locations
 
 def generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, dist_type, non_random_dist_type):
@@ -814,7 +925,7 @@ def create_collage(large_image, small_images, particle_locations):
     
     return collage
 
-def blend_images(large_image, small_images, particle_locations, scale, pdb_name, imod_coordinate_file, coord_coordinate_file, large_image_path, image_path, flip_x, flip_y):
+def blend_images(large_image, small_images, particle_locations, scale, pdb_name, imod_coordinate_file, coord_coordinate_file, large_image_path, image_path, json_scale, flip_x, flip_y, polygon_expansion_distance):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -825,16 +936,21 @@ def blend_images(large_image, small_images, particle_locations, scale, pdb_name,
     :param scale: The scale factor to adjust the intensity of the particles.
     :param pdb_name: The name of the PDB file.
     :param image_path: The path of the image.
+    :param json_scale: Binning factor used when labeling junk to create the json file.
     :param flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param flip_y: Boolean to determine if the y-coordinates should be flipped.
+    :param polygon_expansion_distance: Distance by which to expand the polygons.
     :return: The blended large image.
     """
     json_file_path = os.path.splitext(large_image_path)[0] + ".json"
     if os.path.exists(json_file_path):
-        polygons = read_polygons_from_json(json_file_path, flip_x, flip_y)
+        polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
         
-        # Remove particle locations from inside polygons (junk in micrographs) when writing coordeinate files
-        filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, polygons)
+        # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
+        filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
+        num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
+        removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]
+        print(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.")
     else:
         print(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}")
         filtered_particle_locations = particle_locations
@@ -855,6 +971,7 @@ def blend_images(large_image, small_images, particle_locations, scale, pdb_name,
     # Make an Imod .mod coordinates file if requested
     if imod_coordinate_file:
         write_mod_file(filtered_particle_locations, os.path.splitext(image_path)[0] + ".mod")
+        write_mod_file(removed_particles, os.path.splitext(image_path)[0] + "r.mod")
 
     # Make a .coord coordinates file if requested
     if coord_coordinate_file:
@@ -881,7 +998,7 @@ def blend_images2(large_image, small_images, particle_locations, scale, pdb_name
     if os.path.exists(json_file_path):
         polygons = read_polygons_from_json(json_file_path, flip_x, flip_y)
         
-        # Remove particle locations from inside polygons (junk in micrographs) when writing coordeinate files
+        # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
         filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, polygons)
     else:
         print(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}")
@@ -927,7 +1044,7 @@ def blend_images2(large_image, small_images, particle_locations, scale, pdb_name
     
     return large_image
 
-def add_images(large_image_path, small_images, pdb_id, border_distance, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, flip_x, flip_y, verbosity):
+def add_images(large_image_path, small_images, pdb_id, border_distance, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality, verbosity):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
@@ -957,13 +1074,27 @@ def add_images(large_image_path, small_images, pdb_id, border_distance, scale, o
     
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image = blend_images(large_image, small_images, particle_locations, scale, pdb_id, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, flip_x, flip_y)
+        result_image = blend_images(large_image, small_images, particle_locations, scale, pdb_id, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, json_scale, flip_x, flip_y, polygon_expansion_distance)
     else:
-        print_verbose(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now", verbosity)
-        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], particle_locations, scale, pdb_id, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, flip_x, flip_y)
+        print_verbose(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", verbosity)
+        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], particle_locations, scale, pdb_id, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, json_scale, flip_x, flip_y, polygon_expansion_distance)
 
-    # Save the resulting micrograph
-    writemrc(output_path, result_image)
+    # Save the resulting micrograph in specified formats
+    if save_as_mrc:
+        print_verbose(f"\nWriting synthetic micrograph as a MRC file: {output_path}.mrc...\n", verbosity)
+        writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image))  # Write mrc normalized with mean of 0 and std of 1
+    if save_as_png:
+        # Needs to be scaled from 0 to 255 and flipped
+        result_image -= result_image.min()
+        result_image = result_image / result_image.max() * 255.0
+        print_verbose(f"\nWriting synthetic micrograph as a PNG file: {output_path}.png...\n", verbosity)
+        cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
+    if save_as_jpeg:
+        # Needs to be scaled from 0 to 255 and flipped
+        result_image -= result_image.min()
+        result_image = result_image / result_image.max() * 255.0
+        print_verbose(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...\n", verbosity)
+        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
 
     return len(particle_locations)
 
@@ -1071,10 +1202,9 @@ def generate_micrographs(pdb_id, args):
         print_verbose("Done!\n", args.verbosity)
         
         print_verbose(f"Adding the {num_particles} PBD volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", args.verbosity)
-        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{pdb_id}_noise_CTF.mrc", pdb_id, args.border, rand_ice_thickness, f"{pdb_id}/{fname}_{pdb_id}.mrc", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.flip_x, args.flip_y, args.verbosity)
+        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{pdb_id}_noise_CTF.mrc", pdb_id, args.border, rand_ice_thickness, f"{pdb_id}/{fname}_{pdb_id}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality, args.verbosity)
         print_verbose("Done!", args.verbosity)
         total_num_particles += num_particles
-        print_verbose(f"\nDone generating synthetic micrograph {fname}_{pdb_id}.mrc!\n", args.verbosity)
 
         # Cleanup
         for temp_file in [f"temp_{pdb_id}.hdf", f"temp_{pdb_id}.mrc", f"temp_{pdb_id}_noise.mrc", f"temp_{pdb_id}_noise_CTF.mrc"]:
@@ -1084,7 +1214,7 @@ def generate_micrographs(pdb_id, args):
     # Downsample micrographs and coordinate files
     if args.binning > 1:
         # Downsample micrographs
-        print_verbose(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping\n", args.verbosity)
+        print_verbose(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping...\n", args.verbosity)
         parallel_downsample(f"{pdb_id}/", args.cpus, args.binning)
         
         # Downsample coordinate files
@@ -1109,15 +1239,23 @@ def generate_micrographs(pdb_id, args):
 
         if not args.keep:
             # Delete the non-downsampled micrographs and coordinate files and move the binned ones to the parent directory
-            print_verbose("Removing non-downsamlpled micrographs", args.verbosity)
+            print_verbose("Removing non-downsamlpled micrographs...", args.verbosity)
             bin_dir = f"{pdb_id}/bin_{args.binning}/"
             for file in glob.glob(f"{pdb_id}/*.mrc"):
+                os.remove(file)
+            for file in glob.glob(f"{pdb_id}/*.png"):
+                os.remove(file)
+            for file in glob.glob(f"{pdb_id}/*.jpeg"):
                 os.remove(file)
             for file in glob.glob(f"{pdb_id}/*.mod"):
                 os.remove(file)
             for file in glob.glob(f"{pdb_id}/*.coord"):
                 os.remove(file)
             for file in glob.glob(f"{pdb_id}/bin_{args.binning}/*.mrc"):
+                shutil.move(file, f"{pdb_id}/")
+            for file in glob.glob(f"{pdb_id}/bin_{args.binning}/*.png"):
+                shutil.move(file, f"{pdb_id}/")
+            for file in glob.glob(f"{pdb_id}/bin_{args.binning}/*.jpeg"):
                 shutil.move(file, f"{pdb_id}/")
             for file in glob.glob(f"{pdb_id}/bin_{args.binning}/*.mod"):
                 shutil.move(file, f"{pdb_id}/")
@@ -1165,14 +1303,21 @@ def main():
     parser.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps. Default is the number of CPU cores available")
     parser.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing filenames of images with a defocus value after each filename (space between)")
     parser.add_argument("-D", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format")
+    parser.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
+    parser.add_argument("--no-mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
+    parser.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
+    parser.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
+    parser.add_argument("-Q", "--jpeg-quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100)")
+    parser.add_argument("-j", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the json file.")
     parser.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
     parser.add_argument("-y", "--flip_y", action="store_true", help="Flip the polygons that identify junk along the y-axis")
-    parser.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs and particle projections before superimposing them. This will result in the output micrographs being downsampled. Binning is the sidelength divided by this factor (e.g. -d 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph)")
+    parser.add_argument("-e", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the json file uses.")
+    parser.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs by Fourier cropping after superimposing particle projections. Binning is the sidelength divided by this factor (e.g. -d 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph)")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
     parser.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the existing images (EMAN2 e2pdb2mrc.py option)")
     parser.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option)")
     parser.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise")
-    parser.add_argument("-P", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting")
+    parser.add_argument("-F", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting")
     parser.add_argument("-A", "--ampcont", type=float, default=10, help="Amplitude contrast when applying CTF to projections (EMAN2 e2proc2d.py option)")
     parser.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is 0.001 because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
     parser.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage when applying CTF to projections (EMAN2 e2proc2d.py option)")
@@ -1185,6 +1330,9 @@ def main():
     parser.add_argument("-v", "--version", action="version", version=f"Synthetic Micrograph Generator v{__version__}")
     args = parser.parse_args()
     
+    if not (args.mrc or args.png or args.jpeg):
+        parser.error("No format specified for saving images. Please specify at least one format.")
+
     # Set verbosity level
     args.verbosity = 0 if args.quiet else args.verbosity
 
