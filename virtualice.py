@@ -131,9 +131,9 @@ def process_pdb_input(pdb_input, verbosity):
     if pdb_input.lower() in ['r', 'random']:
         # Request for a random PDB
         print_verbose("Trying to download a random PDB...", verbosity)
-        pdb_id = download_random_pdb()
+        pdb_id = download_random_pdb(verbosity)
         if pdb_id:
-            print_verbose(f"Random PDB selected: {pdb_id}", verbosity)
+            print_verbose(f"Random PDB downloaded: {pdb_id}", verbosity)
             return pdb_id
         else:
             print_verbose("Failed to download a random PDB.", verbosity)
@@ -151,42 +151,46 @@ def process_pdb_input(pdb_input, verbosity):
         else:
             return None
 
-def download_pdb(pdb_id, verbosity):
+def download_pdb(pdb_id, verbosity, suppress_errors=False):
     """
     Download a PDB file from the RCSB website.
 
     :param str pdb_id: The ID of the PDB to be downloaded.
     :param int verbosity: The verbosity level for printing status messages.
+    :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return: True if the PDB exists, False if it doesn't.
     """
-    print_verbose(f"Downloading PDB {pdb_id}...", verbosity)
+    if not suppress_errors:
+        print_verbose(f"Downloading PDB {pdb_id}...", verbosity)
     url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
     try:
         request.urlretrieve(url, f"{pdb_id}.pdb")
         print_verbose(f"Done!\n", verbosity)
         return True
     except error.HTTPError as e:
-        print_verbose(f"Failed to download PDB {pdb_id}. HTTP Error: {e.code}\n", verbosity)
+        if not suppress_errors:
+            print_verbose(f"Failed to download PDB {pdb_id}. HTTP Error: {e.code}\n", verbosity)
         return False
     except Exception as e:
-        print_verbose(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", verbosity)
+        if not suppress_errors:
+            print_verbose(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", verbosity)
         return False
 
-def download_random_pdb():
+def download_random_pdb(verbosity):
     """
     Download a random PDB file from the RCSB website.
 
-    :return: True if the PDB is downloaded successfully, False otherwise.
+    :param int verbosity: The verbosity level for printing status messages.
+    :return: The ID of the PDB if downloaded successfully, otherwise False.
     """
     while True:
         # Generate a random 4-alphanumeric PDB ID
         pdb_id = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=4))
-
         # Attempt to download the PDB file
-        success = download_pdb(pdb_id, verbosity=1)
-
+        success = download_pdb(pdb_id, verbosity, suppress_errors=True)  # Suppress errors for random PDB download attempts
         if success:
             return pdb_id
+        # No need to explicitly handle failure; loop continues until a successful download occurs
 
 def convert_pdb_to_mrc(pdb_name, apix, res, verbosity):
     """
@@ -386,9 +390,9 @@ def read_polygons_from_json(json_file_path, expansion_distance, flip_x=False, fl
             
     return polygons
 
-def shuf_images(num_images, image_list_file, verbosity):
+def extend_and_shuffle_image_list(num_images, image_list_file, verbosity):
     """
-    Shuffle and select a specified number of random ice micrographs.
+    Extend (if necessary), shuffle, and select a specified number of random ice micrographs.
 
     :param int num_images: The number of images to select.
     :param str image_list_file: The path to the file containing the list of images.
@@ -396,16 +400,22 @@ def shuf_images(num_images, image_list_file, verbosity):
     :return: A list of selected ice micrograph filenames and defoci.
     """
     print_verbose(f"Selecting {num_images} random ice micrographs...", verbosity)
-    # Read the contents of the image list file and store each image as a separate element in a list
+    # Read the list of available micrographs and their defoci
     with open(image_list_file, "r") as f:
-        image_list = f.readlines()
-        image_list = [image.strip() for image in image_list]
-
-    # Shuffle the order of images randomly
-    random.shuffle(image_list)
-    # Select the desired number of images from the shuffled list and sort alphanumerically
-    selected_images = sorted(image_list[:num_images])
-
+        image_list = [line.strip() for line in f.readlines() if line.strip()]
+    
+    if num_images <= len(image_list):
+        # Shuffle the order of images randomly
+        random.shuffle(image_list)
+        # Select the desired number of images from the shuffled list and sort alphanumerically
+        selected_images = sorted(image_list[:num_images])
+    else:
+        num_full_rounds = num_images // len(image_list)
+        additional_images_needed = num_images % len(image_list)
+        extended_list = image_list * num_full_rounds
+        extended_list += random.sample(image_list, additional_images_needed)
+        selected_images = sorted(extended_list)
+    
     print_verbose("Done!\n", verbosity)
 
     return selected_images
@@ -785,24 +795,33 @@ def generate_particle_locations(image_size, num_small_images, half_small_image_w
                     attempts += 1  # Increment attempts counter if addition is unsuccessful
         
         elif non_random_dist_type == 'inverse circular':
-            # Parameters for the central exclusion zone
-            exclusion_center = (width // 2, height // 2)  # Center of the image
-            exclusion_radius = min(width, height) // 4  # Defines the radius of the exclusion circle, adjust as needed
+            # Parameters for the exclusion zone
+            # Randomly determine the center within the image, away from the edges
+            exclusion_center_x = np.random.randint(border_distance + half_small_image_width, width - border_distance - half_small_image_width)
+            exclusion_center_y = np.random.randint(border_distance + half_small_image_width, height - border_distance - half_small_image_width)
+            exclusion_center = (exclusion_center_x, exclusion_center_y)
+
+            # Determine the maximum possible radius for the exclusion zone based on the image size and center position
+            max_radius = min(width // 2, height // 2)
+    
+            # Randomly select a radius for the exclusion zone
+            exclusion_radius = np.random.randint(half_small_image_width, max_radius)
 
             # Generate particle locations avoiding the central circle
             attempts = 0  # Counter for attempts to find a valid position outside the exclusion zone
             while len(particle_locations) < num_small_images and attempts < max_attempts:
-                # Generate a random location within the entire image
                 x = np.random.randint(border_distance, width - border_distance)
                 y = np.random.randint(border_distance, height - border_distance)
 
-                # Check if the location is outside the exclusion circle
-                distance_from_center = np.sqrt((x - exclusion_center[0])**2 + (y - exclusion_center[1])**2)
-                if distance_from_center > exclusion_radius and is_far_enough((x, y), particle_locations, half_small_image_width):
-                    particle_locations.append((x, y))
-                    attempts = 0  # Reset attempts counter after successful addition
+                # Check if the location is outside the exclusion zone
+                if np.sqrt((x - exclusion_center_x) ** 2 + (y - exclusion_center_y) ** 2) > exclusion_radius:
+                    if is_far_enough((x, y), particle_locations, half_small_image_width):
+                        particle_locations.append((x, y))
+                        attempts = 0  # Reset attempts counter after successful addition
+                    else:
+                        attempts += 1  # Increment attempts counter if addition is unsuccessful
                 else:
-                    attempts += 1  # Increment attempts counter if addition is unsuccessful
+                    attempts += 1  # Increment attempts counter if location is inside the exclusion zone
                 
         elif non_random_dist_type == 'gaussian':
             num_gaussians = np.random.randint(1, 6)  # Random number of Gaussian distributions between 1 and 5
@@ -1077,17 +1096,26 @@ def generate_micrographs(pdb_name, args, pdb_index, total_pdbs):
     # Write STAR header for the current synthetic dataset
     write_star_header(pdb_name, args.apix, args.voltage, args.Cs)
     
-    # Shuffle ice images
-    selected_images = shuf_images(args.num_images, args.image_list_file, args.verbosity)
+    # Shuffle and possibly extend the ice images
+    selected_images = extend_and_shuffle_image_list(args.num_images, args.image_list_file, args.verbosity)
     
     # Main Loop
     total_num_particles = 0
     current_micrograph_number = 0
+    micrograph_usage_count = {}  # Dictionary to keep track of repeating micrograph names if the image list was extended
     for line in selected_images:
         current_micrograph_number += 1
         # Parse the 'micrograph_name.mrc defocus' line
         fields = line.strip().split()
         fname, defocus = fields[0], fields[1]
+        # Update micrograph usage count
+        if fname in micrograph_usage_count:
+            micrograph_usage_count[fname] += 1
+        else:
+            micrograph_usage_count[fname] = 1
+        # Generate the repeat number suffix for the filename
+        repeat_number = micrograph_usage_count[fname]
+        repeat_suffix = f"{repeat_number}" if repeat_number > 1 else ""
         
         extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(pdb_index)) + len(str(total_pdbs)) + len(str(fname)))
         print_verbose(f"\n-----------------------------------------------------------{extra_hyphens}", args.verbosity)
@@ -1119,7 +1147,7 @@ def generate_micrographs(pdb_name, args, pdb_index, total_pdbs):
         dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.3, 0.7])
         if dist_type == 'non-random':
             # Randomly select a non-random distribution, weighted towards inverse circular and gaussian because they are more common. Note: gaussian can create 1-5 gaussian blobs on the micrograph
-            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0.14, 0.5, 0.36])
+            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0, 1, 0])
             if non_random_dist_type == 'circular':
                 # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                 num_particles = max(num_particles // 2, 2)  # Minimum number of particles is 2
@@ -1155,7 +1183,7 @@ def generate_micrographs(pdb_name, args, pdb_index, total_pdbs):
         print_verbose("Done!\n", args.verbosity)
         
         print_verbose(f"Adding the {num_particles} PBD volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", args.verbosity)
-        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{pdb_name}_noise_CTF.mrc", pdb_name, args.border, rand_ice_thickness, f"{pdb_name}/{fname}_{pdb_name}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality, args.verbosity)
+        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{pdb_name}_noise_CTF.mrc", pdb_name, args.border, rand_ice_thickness, f"{pdb_name}/{fname}_{pdb_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality, args.verbosity)
         print_verbose("Done!", args.verbosity)
         total_num_particles += num_particles
 
@@ -1290,8 +1318,8 @@ def main():
     args.verbosity = 0 if args.quiet else args.verbosity
 
     # Limit num_images to: min = num of files in image_list_file, max = number of .mrc files in the image_directory
-    args.num_images = min(args.num_images, sum(1 for _ in open(args.image_list_file)))
-    args.num_images = min(args.num_images, sum(1 for file in os.listdir(args.image_directory) if file.endswith('.mrc')))
+    #args.num_images = min(args.num_images, sum(1 for _ in open(args.image_list_file)))
+    #args.num_images = min(args.num_images, sum(1 for file in os.listdir(args.image_directory) if file.endswith('.mrc')))
 
     # Print all arguments for the user's information
     formatted_output = ""
@@ -1320,7 +1348,7 @@ def main():
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.pdbs)
     print("\n---------------------------------------------------------------------------------------------------------------------")
-    print(f"Total time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_pdbs} PDBs with a total of {total_number_of_particles} particles: {time_str}")
+    print(f"Total time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_pdbs} PDB{'s' if total_pdbs != 1 else ''} with a total of {total_number_of_particles} particles: {time_str}")
     print("---------------------------------------------------------------------------------------------------------------------\n")
     
     print("One .star file per pdb can be found in the run directories.\n")
