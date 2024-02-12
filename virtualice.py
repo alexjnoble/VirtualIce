@@ -1515,9 +1515,9 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
                     os.remove(file_path)
         except FileNotFoundError:
             pass
-    #for temp_file in [f"{structure_name}.pdb", f"{structure_name}.map", f"{structure_name}.mrc", "thread.out", ".eman2log.txt"]:
-    #    if os.path.exists(temp_file):
-    #        os.remove(temp_file)
+    for temp_file in [f"{structure_name}.pdb", f"{structure_name}.map", f"{structure_name}.mrc", "thread.out", ".eman2log.txt"]:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
     return total_num_particles
     
@@ -1525,7 +1525,19 @@ def main():
     start_time = time.time()
     
     # Argument parsing
-    parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons are projected but not written to coordinate files.")
+    parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons are projected but not written to coordinate files.",
+    epilog="""
+    Examples:
+      1. Basic usage: virtualice.py -s 1TIM -n 10
+         Generates 10 random micrographs of PDB 1TIM.
+
+      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -d n -p 2
+         Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, and EMD-11638.
+         Also outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
+         Also uses a random distribution of particles and parallelizes micrograph generation across 2 CPUs.
+    """,
+    formatter_class=argparse.RawDescriptionHelpFormatter)  # Preserves whitespace for better formatting
+    
     # Input Options
     input_group = parser.add_argument_group('Input Options')
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, and/or 'r' or 'random' for a random PDB or EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Default is %(default)s.")
