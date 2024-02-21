@@ -30,6 +30,8 @@ Basic example usage:
 ./virtualice.py -s 1TIM -n 10
 ```
 
+Generates 10 random micrographs of PDB 1TIM.
+
 ## Arguments
 
 - `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
@@ -40,6 +42,8 @@ Advanced example usage:
 ```
 ./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -p 2
 ```
+
+Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, and EMD-11638. Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4. Uses a random distribution of particles and parallelizes micrograph generation across 2 CPUs.
 
 ## Arguments
 
