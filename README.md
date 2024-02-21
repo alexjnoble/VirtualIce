@@ -43,7 +43,7 @@ Advanced example usage:
 ./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -p 2
 ```
 
-Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <span style="font-style:italic;">r</span>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <span style="font-style:italic;">n</span>on-random distribution of particles and `-p` parallelizes micrograph generation across _2_ CPUs.
+Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <i>n</i>on-random distribution of particles and `-p` parallelizes micrograph generation across _2_ CPUs.
 
 ## Arguments
 
