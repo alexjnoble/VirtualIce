@@ -1,15 +1,16 @@
 # VirtualIce: Synthetic CryoEM Micrograph Generator
 
-VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects Protein Data Bank (PDB) structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise and applying CTF to particles.
+VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects Protein Data Bank (PDB) structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
 
 #### Features
 
-- Generates synthetic cryoEM micrographs from PDB IDs or local PDB files.
-- Supports MRC, PNG, and JPEG output formats.
-- Incorporates realistic imaging conditions including Poisson and Gaussian noise.
+- Generates synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
+- Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate.
+- Adds Poisson and Gaussian noise to particles.
 - Applies Contrast Transfer Function (CTF) to simulate microscope optics.
-- Multi-core processing for efficient image generation.
-- Extensive customization options including particle distribution, ice thickness, and microscopy parameters.
+- Outputs micrographs as MRC, PNG, and JPEG output formats.
+- Multi-core processing.
+- Extensive customization options including particle distribution, ice thickness, and microscope parameters.
 
 ## Installation
 
@@ -23,22 +24,34 @@ pip install numpy scipy matplotlib opencv-python-headless mrcfile
 
 The script can be run from the command line and takes a number of arguments.
 
-Example usage for generating synthetic micrographs:
+Basic example usage:
 
 ```
-./virtualice.py -p 1TIM -n 100 --png --jpeg -s 4
+./virtualice.py -s 1TIM -n 10
 ```
 
 ## Arguments
 
-- `-p`, `--pdbs`: Specify PDB IDs or paths to local PDB files.
+- `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
 - `-n`, `--num_images`: Number of micrographs to generate.
-- `--mrc`, `--png`, `--jpeg`: Output format options.
-- `-s`, `--scale`: Scaling factor for particle images.
-- `-a`, `--apix`: Angstrom per pixel for the output images.
-- `-c`, `--cpus`: Number of CPU cores to use.
 
-Additional arguments for fine-tuning the generation process including binning, noise simulation levels, and CTF application parameters.
+Advanced example usage:
+
+```
+./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -p 2
+```
+
+## Arguments
+
+- `-I`, `--imod_coordinate_file`: Also output one IMOD .mod coordinate file per micrograph.
+- `-P`, `--png`: Output in PNG format.
+- `-P`, `--jpeg`: Output in JPEG format.
+- `-Q`, `--jpeg-quality`: JPEG image quality.
+- `-b`, `--binning`: Bin micrographs by downsampling.
+- `-D`, `--distribution`: Distribution type for generating particle locations.
+- `-p`, `--parallel_processes`: Parallel processes for micrograph generation.
+
+Additional arguments exist for fine-tuning the generation process including ice thickness, junk filtering, and CTF parameters.
 
 ## Ethical Use Agreement
 
