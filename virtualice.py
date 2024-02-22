@@ -1260,7 +1260,7 @@ def create_collage(large_image, small_images, particle_locations):
     
     return collage
 
-def blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, image_path, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity):
+def blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -1270,7 +1270,11 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
     :param list_of_tuples particle_locations: The locations of the particles within the large image.
     :param float scale: The scale factor to adjust the intensity of the particles.
     :param str structure_name: The name of the structure file.
-    :param str image_path: The path of the image.
+    :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
+    :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
+    :param str large_image_path: The path of the micrograph.
+    :param str image_path: The output path.
+    :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
     :param int json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
@@ -1278,16 +1282,20 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
     :return numpy_array: The blended large image.
     """
     json_file_path = os.path.splitext(large_image_path)[0] + ".json"
-    if os.path.exists(json_file_path):
-        polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
+    if not no_junk_filter:
+        if os.path.exists(json_file_path):
+            polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
         
-        # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
-        filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
-        num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-        #removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]  # Makes a list of particles that were removed
-        print_verbose(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.", verbosity, level=2)
+            # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
+            filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
+            num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
+            #removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]  # Makes a list of particles that were removed
+            print_verbose(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.", verbosity, level=2)
+        else:
+            print_verbose(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}", verbosity, level=1)
+            filtered_particle_locations = particle_locations
     else:
-        print_verbose(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}", verbosity, level=1)
+        print_verbose("Skipping junk filtering (ie. not using JSON file)", verbosity, level=2)
         filtered_particle_locations = particle_locations
 
     # Normalize the input micrograph to itself
@@ -1301,20 +1309,20 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
     # Normalize the resulting micrograph to itself
     blended_image = (blended_image - blended_image.mean()) / blended_image.std()
 
-    write_all_coordinates_to_star(structure_name, image_path + ".mrc", filtered_particle_locations)
+    write_all_coordinates_to_star(structure_name, output_path + ".mrc", filtered_particle_locations)
     
     # Make an Imod .mod coordinates file if requested
     if imod_coordinate_file:
-        write_mod_file(filtered_particle_locations, os.path.splitext(image_path)[0] + ".mod", verbosity)
-        #write_mod_file(removed_particles, os.path.splitext(image_path)[0] + "_removed.mod", verbosity)  # Writes the particles that were removed
+        write_mod_file(filtered_particle_locations, os.path.splitext(output_path)[0] + ".mod", verbosity)
+        #write_mod_file(removed_particles, os.path.splitext(output_path)[0] + "_removed.mod", verbosity)  # Writes the particles that were removed
 
     # Make a .coord coordinates file if requested
     if coord_coordinate_file:
-        write_coord_file(filtered_particle_locations, os.path.splitext(image_path)[0] + ".coord")
+        write_coord_file(filtered_particle_locations, os.path.splitext(output_path)[0] + ".coord")
 
     return blended_image
 
-def add_images(large_image_path, small_images, structure_name, border_distance, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality, verbosity):
+def add_images(large_image_path, small_images, structure_name, border_distance, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality, verbosity):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
@@ -1322,11 +1330,21 @@ def add_images(large_image_path, small_images, structure_name, border_distance, 
     :param str small_images: The file path of the small images or particles.
     :param str structure_name: The name of the structure file.
     :param int border_distance: The minimum distance between particles and the image border.
-    :param str output_path: The file path to save the resulting micrograph.
     :param float scale: The scale factor to adjust the intensity of the particles.
+    :param str output_path: The file path to save the resulting micrograph.
+    :param str dist_type: The type of distribution (random or non-random) for placing particles in micrographs.
+    :param str non_random_dist_type: The type of non-random distribution (circular, inverse circular, gaussian) for placing particles in micrographs.
+    :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
+    :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
+    :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
+    :param float json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
-    :param int num_cores: Number of processes to use for multiprocessing.
+    :param float polygon_expansion_distance: Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates.
+    :param bool save_as_mrc: Boolean to save the resulting synthetic micrograph and an MRC file.
+    :param bool save_as_png: Boolean to save the resulting synthetic micrograph and an PNG file.
+    :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
+    :param int jpeg_quality: Quality of the JPEG image.
     :param int verbosity: Print out verbosity level.
     :return int: The actual number of particles added to the micrograph.
     """
@@ -1344,10 +1362,10 @@ def add_images(large_image_path, small_images, structure_name, border_distance, 
     
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image = blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity)
+        result_image = blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity)
     else:
         print_verbose(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", verbosity, level=2)
-        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity)
+        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, verbosity)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
@@ -1564,7 +1582,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_verbose("Done!\n", args.verbosity, level=2)
         
         print_verbose(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", args.verbosity, level=2)
-        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", structure_name, args.border, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality, args.verbosity)
+        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", structure_name, args.border, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality, args.verbosity)
         print_verbose("Done!", args.verbosity, level=2)
         total_num_particles += num_particles
 
@@ -1715,6 +1733,7 @@ def main():
     
     # Junk Labels Options
     junk_labels_group = parser.add_argument_group('Junk Labels Options')
+    junk_labels_group.add_argument("--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Don't remove particles from coordinate files that are on/near junk or substrate.")
     junk_labels_group.add_argument("-j", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the json file. Default is %(default)s")
     junk_labels_group.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
     junk_labels_group.add_argument("-y", "--flip_y", action="store_true", help="Flip the polygons that identify junk along the y-axis")
