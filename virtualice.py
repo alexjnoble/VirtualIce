@@ -203,8 +203,8 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize, ver
         if download_emdb(structure_input, verbosity):
             structure_input = f"emd_{structure_input}.map"
             converted_file = normalize_and_convert_mrc(structure_input, verbosity)
-            scale_mrc_file(f"{converted_file}.mrc", pixelsize, verbosity)
             threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
+            scale_mrc_file(f"{converted_file}.mrc", pixelsize, verbosity)
             converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc", verbosity)
             return (converted_file, "mrc")
         else:
@@ -293,7 +293,7 @@ def download_emdb(emdb_id, verbosity, suppress_errors=False):
         os.remove(local_filename)
         
         if not suppress_errors:
-            print_verbose(f"Download and decompression complete for EMD-{emdb_id}.", verbosity, level=1)
+            print_verbose(f"Download and decompression complete for EMD-{emdb_id}.", verbosity, level=2)
         return True
     except error.HTTPError as e:
         if not suppress_errors:
@@ -414,21 +414,23 @@ def scale_mrc_file(input_file, pixelsize, verbosity):
     scaled_dimension_y = int(((original_shape[1] * scale_factor) // 2) * 2)
     scaled_dimension_z = int(((original_shape[2] * scale_factor) // 2) * 2)
     
-    # Construct the e2proc3d.py command for scaling
+    # Construct the e2proc3d.py command for scaling. Using a temp file because otherwise the mrc filesize and header don't match, causing a warning from mrcfile during thresholding
     if scale_factor < 1:
         command = ["e2proc3d.py",
-            input_file, input_file,
+            input_file, f"temp_scale_{input_file}",
             "--scale={}".format(scale_factor),
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z)]
     elif scale_factor > 1:
         command = ["e2proc3d.py",
-            input_file, input_file,
+            input_file, f"temp_scale_{input_file}",
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z),
             "--scale={}".format(scale_factor)]
     else:  # scale_factor == 1:
         return
+    
     try:
         output = subprocess.run(command, capture_output=True, text=True, check=True)
+        os.system(f"mv temp_scale_{input_file} {input_file}")
         print_verbose(output, verbosity, level=2)
     except subprocess.CalledProcessError as e:
         print_verbose(f"Error during scaling operation: {e}", verbosity, level=1)
