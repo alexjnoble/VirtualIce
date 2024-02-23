@@ -188,12 +188,14 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize, ver
     elif is_local_pdb_path(structure_input):
         print_verbose(f"Using local PDB file: {structure_input}", verbosity, level=1)
         # Make a local copy of the file
-        shutil.copy(structure_input, os.path.basename(structure_input))
+        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
+            shutil.copy(structure_input, os.path.basename(structure_input))
         return (os.path.basename(structure_input).split('.')[0], "pdb")
     elif is_local_mrc_path(structure_input):
         print_verbose(f"Using local MRC/MAP file: {structure_input}", verbosity, level=1)
         # Make a local copy of the file
-        shutil.copy(structure_input, os.path.basename(structure_input))
+        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
+            shutil.copy(structure_input, os.path.basename(structure_input))
         converted_file = normalize_and_convert_mrc(structure_input, verbosity)
         threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
         scale_mrc_file(f"{converted_file}.mrc", pixelsize, verbosity)
@@ -1189,10 +1191,10 @@ def process_slice(args):
             # Initialize a frame with zeros
             noisy_frame = np.zeros_like(particle, dtype=np.float32)
             
-            # Add Poisson noise to the non-zero values in the particle
+            # Add Poisson noise to the non-zero values in the particle, modulated by the original pixel values; it represents shot noise.
             noisy_frame[mask] = np.random.poisson(particle[mask])
             
-            # Generate Gaussian electronic noise and restrict it to the mask
+            # Generate Gaussian electronic noise and restrict it to the mask. This noise is not modulated by the original pixel values; it represents uniform camera readout noise.
             electronic_noise = np.round(np.random.normal(loc=0, scale=electronic_noise_std, size=particle.shape)).astype(np.int32)
             electronic_noise *= mask.astype(np.int32)
             
