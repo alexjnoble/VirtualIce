@@ -1598,6 +1598,22 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
                 mrc_particle.set_data(cropped_particle.astype(np.float32))
 
 def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
+    """
+    Crops particles from micrographs based on coordinates specified in a micrograph STAR file
+    and saves them with a specified box size. This function operates in parallel, using a specified
+    number of CPU cores to process different micrographs concurrently.
+
+    :param str structure_dir: The directory containing the structure's micrographs and STAR file.
+    :param int box_size: The box size in pixels for the cropped particles. If None, the function
+                         will dynamically determine the box size from the .mrc map used for projections.
+    :param int num_cpus: The number of CPU cores to use for parallel processing. If not specified,
+                         all available cores are used.
+
+    Notes:
+    - Particles whose specified box would extend beyond the micrograph boundaries are not cropped.
+    - This function assumes the presence of a STAR file in the structure directory with the naming
+      convention '{structure_name}.star' containing the necessary coordinates for cropping.
+    """
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
@@ -1613,10 +1629,10 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
         for micrograph_name, particle_rows in grouped_df:
             micrograph_path = os.path.join(micrograph_name)
             if not os.path.exists(micrograph_path):
-                print(f"Micrograph not found: {micrograph_path}")
+                log_with_details(f"Micrograph not found: {micrograph_path}", logging.WARNING)
                 continue
             
-            print(f"Extracting {len(particle_rows)} particles for {micrograph_name}...")
+            log_with_details(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
             future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size)
             futures.append(future)
         
