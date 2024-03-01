@@ -51,11 +51,10 @@ import itertools
 import subprocess
 import numpy as np
 import pandas as pd
-from EMAN2 import EMData
-from datetime import datetime, timedelta
 from matplotlib.path import Path
 from multiprocessing import Pool
 from urllib import request, error
+from datetime import datetime, timedelta
 from scipy.ndimage import gaussian_filter
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
@@ -69,36 +68,24 @@ def parse_arguments():
 
     :returns argparse.Namespace: An object containing attributes for each command-line argument.
     """
-    parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons are projected but not written to coordinate files.",
+    parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons at junk/substrate locations are projected but not written to coordinate files.",
     epilog="""
     Examples:
       1. Basic usage: virtualice.py -s 1TIM -n 10
          Generates 10 random micrographs of PDB 1TIM.
 
-      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -d n -p 2
-         Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, and EMD-11638.
+      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -d n -p 2 -C
+         Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
          Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
-         Uses a non-random distribution of particles and parallelizes micrograph generation across 2 CPUs.
+         Uses a non-random distribution of particles, parallelizes micrograph generation across 2 CPUs, and crops particles
     """,
     formatter_class=argparse.RawDescriptionHelpFormatter)  # Preserves whitespace for better formatting
 
     # Input Options
     input_group = parser.add_argument_group('Input Options')
-    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, and/or 'r' or 'random' for a random PDB or EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Default is %(default)s.")
+    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Default is %(default)s.")
     input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
-
-    # Micrograph Output Options
-    output_group = parser.add_argument_group('Micrograph Output Options')
-    output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
-    output_group.add_argument("--no-mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
-    output_group.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
-    output_group.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
-    output_group.add_argument("-Q", "--jpeg-quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
-    output_group.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs by Fourier cropping after superimposing particle projections. Binning is the sidelength divided by this factor (e.g. -b 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph) (e.g. -b 1 is unbinned). Default is %(default)s")
-    output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
-    output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
-    output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
 
     # Particle and Micrograph Generation Options
     particle_micrograph_group = parser.add_argument_group('Particle and Micrograph Generation Options')
@@ -108,9 +95,11 @@ def parse_arguments():
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
     particle_micrograph_group.add_argument("-t", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
     particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson and Gaussian noise. Default is %(default)s")
-    particle_micrograph_group.add_argument("-S", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube (default: %(default)s; ie. %(default)s%% larger)")
+    particle_micrograph_group.add_argument("-S", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 3 distributions: Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=0, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
+    particle_micrograph_group.add_argument("--edge_particles", action="store_true", help="Allow particles to be placed up to the edge of the micrograph.")
+    particle_micrograph_group.add_argument("--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than half a particle box size from the edge, requires --edge_particles to be True or border to be less than half the particle box size.")
 
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
@@ -137,6 +126,18 @@ def parse_arguments():
     particle_cropping_group = parser.add_argument_group('Particle Cropping Options')
     particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Default is no cropping.")
     particle_cropping_group.add_argument("--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
+
+    # Micrograph Output Options
+    output_group = parser.add_argument_group('Micrograph Output Options')
+    output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
+    output_group.add_argument("--no-mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
+    output_group.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
+    output_group.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
+    output_group.add_argument("-Q", "--jpeg-quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
+    output_group.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs by Fourier cropping after superimposing particle projections. Binning is the sidelength divided by this factor (e.g. -b 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph) (e.g. -b 1 is unbinned). Default is %(default)s")
+    output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
+    output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
+    output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
 
     # System and Program Options
     misc_group = parser.add_argument_group('System and Program Options')
@@ -218,11 +219,11 @@ def setup_logging(verbosity):
     logger.addHandler(fh)
     logger.addHandler(ch)
 
-def log_with_details(message, level=logging.INFO):
+def print_and_log(message, level=logging.INFO):
     """
-    Logs a message with the specified level, including detailed debug information if verbosity is set to 3.
+    Prints and logs a message with the specified level, including detailed debug information if verbosity is set to 3.
 
-    :param str message: The message to log.
+    :param str message: The message to print and log.
     :param int level: The logging level for the message (e.g., logging.INFO, logging.DEBUG).
 
     If verbosity is set to 3, the function logs additional details about the caller,
@@ -240,8 +241,8 @@ def log_with_details(message, level=logging.INFO):
         line_no = caller_frame.f_lineno
         module_name = caller_frame.f_globals["__name__"]
 
-        # Skip logging debug information for log_with_details calls to avoid recursion
-        if func_name != 'log_with_details':
+        # Skip logging debug information for print_and_log calls to avoid recursion
+        if func_name != 'print_and_log':
             # Retrieve function parameters and their values for verbosity level 3
             args, _, _, values = inspect.getargvalues(caller_frame)
             args_info = ', '.join([f"{arg}={values[arg]}" for arg in args])
@@ -250,7 +251,7 @@ def log_with_details(message, level=logging.INFO):
             detailed_message = f"{message} - Debug - Module: {module_name}, Function: {func_name}({args_info}), Line: {line_no}"
             logger.log(level, detailed_message)
         else:
-            # For log_with_details function calls, log only the primary message
+            # For print_and_log function calls, log only the primary message
             logger.log(level, message)
 
 def time_diff(time_diff):
@@ -260,7 +261,7 @@ def time_diff(time_diff):
     :param float time_diff: The time difference in seconds.
     :return str: A formatted string indicating the time difference.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Convert the time difference to a timedelta object
     delta = timedelta(seconds=time_diff)
     # Format the timedelta object based on its components
@@ -286,7 +287,7 @@ def is_local_pdb_path(input_str):
     :param str input_str: The input string to be checked.
     :return bool: True if the input string is a valid path to a local `.pdb` file, False otherwise.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     return os.path.isfile(input_str) and input_str.endswith('.pdb')
 
 def is_local_mrc_path(input_str):
@@ -296,7 +297,7 @@ def is_local_mrc_path(input_str):
     :param str input_str: The input string to be checked.
     :return bool: True if the input string is a valid path to a local `.mrc` or `.map` file, False otherwise.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     return os.path.isfile(input_str) and (input_str.endswith('.mrc') or input_str.endswith('.map'))
 
 def is_emdb_id(input_str):
@@ -306,7 +307,7 @@ def is_emdb_id(input_str):
     :param str input_str: The input string to be checked.
     :return bool: True if the input string is a valid EMDB ID format, False otherwise.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     return input_str.isdigit() and (len(input_str) == 4 or len(input_str) == 5)
 
 def is_pdb_id(structure_input):
@@ -316,7 +317,7 @@ def is_pdb_id(structure_input):
     :param str structure_input: The input string to be checked.
     :return bool: True if the input string is a valid PDB ID, False otherwise.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # PDB ID must be 4 characters: first character is a number, next 3 are alphanumeric, and there must be at least one letter
     return bool(re.match(r'^[0-9][A-Za-z0-9]{3}$', structure_input) and any(char.isalpha() for char in structure_input))
 
@@ -325,61 +326,65 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
     Process each structure input by identifying whether it's a PDB ID for download, EMDB ID for download, a local file path, or a request for a random structure.
     Normalize any input .map/.mrc file and convert to .mrc.
 
-    :param str structure_input: The structure input which could be a PDB ID, EMDB ID, a local file path, or a request for a random structure ('r' or 'random').
+    :param str structure_input: The structure input which could be a PDB ID, EMDB ID, a local file path, a request for a random PDB/EMDB structure ('r' or 'random'), a request for a random PDB structure ('rp'), a request for a random EMDB structure ('re' or 'rm').
     :param float std_devs_above_mean: Number of standard deviations above the mean to threshold downloaded/imported .mrc/.map files (for getting rid of some dust).
     :param float pixelsize: Pixel size of the micrograph onto which mrcs will be projected. Used to scale downloaded/imported .pdb/.mrc/.map files.
     :return tuple: A tuple containing the structure ID and file type if the file is successfully identified, downloaded, or a random structure is selected; None if there was an error or the download failed.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
+    def process_local_mrc_file(file_path):
+        converted_file = normalize_and_convert_mrc(file_path)
+        threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
+        scale_mrc_file(f"{converted_file}.mrc", pixelsize)
+        converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
+        return (converted_file, "mrc") if converted_file else None
+
+    def download_random_pdb_structure():
+        print_and_log("Downloading a random PDB...", logging.INFO)
+        pdb_id = download_random_pdb()
+        return (pdb_id, "pdb") if pdb_id else None
+
+    def download_random_emdb_structure():
+        print_and_log("Downloading a random EMDB map...", logging.INFO)
+        emdb_id = download_random_emdb()
+        structure_input = f"emd_{emdb_id}.map"
+        return process_local_mrc_file(structure_input) if emdb_id else None
+
     if structure_input.lower() in ['r', 'random']:
-        # Randomly choose between downloading a PDB or EMDB structure
         if random.choice(["pdb", "emdb"]) == "pdb":
-            log_with_details("Downloading a random PDB...", logging.INFO)
-            pdb_id = download_random_pdb()
-            return (pdb_id, "pdb") if pdb_id else None
+            return download_random_pdb_structure()
         else:
-            log_with_details("Downloading a random EMDB map...", logging.INFO)
-            emdb_id = download_random_emdb()
-            structure_input = f"emd_{emdb_id}.map"
-            converted_file = normalize_and_convert_mrc(structure_input)
-            threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
-            scale_mrc_file(f"{converted_file}.mrc", pixelsize)
-            converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
-            return (converted_file, "mrc") if emdb_id else None
+            return download_random_emdb_structure()
+    elif structure_input.lower() == 'rp':
+        return download_random_pdb_structure()
+    elif structure_input.lower() == 're' or structure_input.lower() == 'rm':
+        return download_random_emdb_structure()
     elif is_local_pdb_path(structure_input):
-        log_with_details(f"Using local PDB file: {structure_input}", logging.WARNING)
+        print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
         if not os.path.samefile(structure_input, os.path.basename(structure_input)):
             shutil.copy(structure_input, os.path.basename(structure_input))
         return (os.path.basename(structure_input).split('.')[0], "pdb")
     elif is_local_mrc_path(structure_input):
-        log_with_details(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
+        print_and_log(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
         if not os.path.samefile(structure_input, os.path.basename(structure_input)):
             shutil.copy(structure_input, os.path.basename(structure_input))
-        converted_file = normalize_and_convert_mrc(structure_input)
-        threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
-        scale_mrc_file(f"{converted_file}.mrc", pixelsize)
-        converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
-        return (converted_file, "mrc") if converted_file else None
+        return process_local_mrc_file(structure_input)
     elif is_emdb_id(structure_input):
         if download_emdb(structure_input):
             structure_input = f"emd_{structure_input}.map"
-            converted_file = normalize_and_convert_mrc(structure_input)
-            threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
-            scale_mrc_file(f"{converted_file}.mrc", pixelsize)
-            converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
-            return (converted_file, "mrc")
+            return process_local_mrc_file(structure_input)
         else:
             return None
     elif is_pdb_id(structure_input):
         if download_pdb(structure_input):
             return (structure_input, "pdb")
         else:
-            log_with_details(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
+            print_and_log(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
             return None
     else:
-        log_with_details(f"Unrecognized structure input: {structure_input}. Please enter a valid PDB ID, EMDB ID, local file path, or 'random'.", logging.WARNING)
+        print_and_log(f"Unrecognized structure input: {structure_input}. Please enter a valid PDB ID, EMDB ID, local file path, or 'random'.", logging.WARNING)
         return None
 
 def download_pdb(pdb_id, suppress_errors=False):
@@ -390,21 +395,21 @@ def download_pdb(pdb_id, suppress_errors=False):
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return bool: True if the PDB exists, False if it doesn't.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     if not suppress_errors:
-        log_with_details(f"Downloading PDB {pdb_id}...", logging.INFO)
+        print_and_log(f"Downloading PDB {pdb_id}...", logging.INFO)
     url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
     try:
         request.urlretrieve(url, f"{pdb_id}.pdb")
-        log_with_details(f"Done!\n", logging.INFO)
+        print_and_log(f"Done!\n", logging.INFO)
         return True
     except error.HTTPError as e:
         if not suppress_errors:
-            log_with_details(f"Failed to download PDB {pdb_id}. HTTP Error: {e.code}\n", logging.WARNING)
+            print_and_log(f"Failed to download PDB {pdb_id}. HTTP Error: {e.code}\n", logging.WARNING)
         return False
     except Exception as e:
         if not suppress_errors:
-            log_with_details(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", logging.WARNING)
+            print_and_log(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", logging.WARNING)
         return False
 
 def download_random_pdb():
@@ -413,7 +418,7 @@ def download_random_pdb():
 
     :return str: The ID of the PDB if downloaded successfully, otherwise False.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     while True:
         valid_pdb_id = False
         while not valid_pdb_id:
@@ -437,14 +442,14 @@ def download_emdb(emdb_id, suppress_errors=False):
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return bool: True if the map exists and is downloaded, False if not.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     url = f"https://files.wwpdb.org/pub/emdb/structures/EMD-{emdb_id}/map/emd_{emdb_id}.map.gz"
     local_filename = f"emd_{emdb_id}.map.gz"
 
     try:
         # Download the gzipped map file
         if not suppress_errors:
-            log_with_details(f"Downloading EMD-{emdb_id}...", logging.WARNING)
+            print_and_log(f"Downloading EMD-{emdb_id}...", logging.WARNING)
         request.urlretrieve(url, local_filename)
 
         # Decompress the downloaded file
@@ -456,15 +461,15 @@ def download_emdb(emdb_id, suppress_errors=False):
         os.remove(local_filename)
 
         if not suppress_errors:
-            log_with_details(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
+            print_and_log(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
         return True
     except error.HTTPError as e:
         if not suppress_errors:
-            log_with_details(f"EMD-{emdb_id} not found. HTTP Error: {e.code}", logging.WARNING)
+            print_and_log(f"EMD-{emdb_id} not found. HTTP Error: {e.code}", logging.WARNING)
         return False
     except Exception as e:
         if not suppress_errors:
-            log_with_details(f"An unexpected error occurred while downloading EMD-{emdb_id}. Error: {e}", logging.WARNING)
+            print_and_log(f"An unexpected error occurred while downloading EMD-{emdb_id}. Error: {e}", logging.WARNING)
         return False
 
 def download_random_emdb():
@@ -473,7 +478,7 @@ def download_random_emdb():
 
     :return str: The ID of the EMDB map if downloaded successfully, otherwise False.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     while True:
         # Generate a random EMDB ID within a reasonable range
         emdb_id = str(random.randint(1, 43542)).zfill(4)  # Makes a 4 or 5 digit number with leading zeros. Random 1-3 digits will also be 4 digit.
@@ -500,7 +505,7 @@ def normalize_and_convert_mrc(input_file):
     - If the input file is not a cube (i.e., all dimensions are not equal), the function calculates the padding needed to center the volume within a cubic volume whose dimension is equal to the maximum dimension of the original volume.
     - The volume is padded with the average value found in the original data, ensuring that added regions do not introduce artificial density.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with mrcfile.open(input_file, mode='r') as mrc:
         dims = mrc.data.shape
         max_dim = max(dims)
@@ -517,7 +522,7 @@ def normalize_and_convert_mrc(input_file):
     try:
         # Normalize the volume
         output = subprocess.run(["e2proc3d.py", input_file, normalized_file, "--outtype=mrc", "--process=normalize.edgemean"], capture_output=True, text=True, check=True)
-        log_with_details(output, logging.INFO)
+        print_and_log(output, logging.INFO)
 
         # Read the normalized volume, pad it, and save to the output file
         with mrcfile.open(normalized_file, mode='r+') as mrc:
@@ -549,7 +554,7 @@ def threshold_mrc_file(input_file_path, std_devs_above_mean):
     :param float std_devs_above_mean: Number of standard deviations above the mean for thresholding.
     :param str output_file_path: Path to the output MRC file. If None, overwrite the input file.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with mrcfile.open(input_file_path, mode='r+') as mrc:
         data = mrc.data
         mean = data.mean()
@@ -565,7 +570,7 @@ def scale_mrc_file(input_file, pixelsize):
     :param str input_mrc_path: Path to the input MRC file.
     :param float pixelsize: The desired pixel size in Angstroms.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Read the current voxel size
     with mrcfile.open(input_file, mode='r') as mrc:
         original_voxel_size = mrc.voxel_size.x  # Assuming cubic voxels for simplicity
@@ -596,9 +601,9 @@ def scale_mrc_file(input_file, pixelsize):
     try:
         output = subprocess.run(command, capture_output=True, text=True, check=True)
         os.system(f"mv temp_scale_{input_file} {input_file}")
-        log_with_details(output, logging.INFO)
+        print_and_log(output, logging.INFO)
     except subprocess.CalledProcessError as e:
-        log_with_details(f"Error during scaling operation: {e}", logging.WARNING)
+        print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
 
 def convert_pdb_to_mrc(pdb_name, apix, res):
     """
@@ -610,19 +615,19 @@ def convert_pdb_to_mrc(pdb_name, apix, res):
 
     :return int: The mass extracted from the e2pdb2mrc.py script output.
     """
-    log_with_details("", logging.DEBUG)
-    log_with_details(f"Converting PDB {pdb_name} to MRC using EMAN2's e2pdb2mrc.py...", logging.INFO)
+    print_and_log("", logging.DEBUG)
+    print_and_log(f"Converting PDB {pdb_name} to MRC using EMAN2's e2pdb2mrc.py...", logging.INFO)
     cmd = ["e2pdb2mrc.py", "--apix", str(apix), "--res", str(res), "--center", f"{pdb_name}.pdb", f"{pdb_name}.mrc"]
     output = subprocess.run(cmd, capture_output=True, text=True)
-    log_with_details(output, logging.INFO)
+    print_and_log(output, logging.INFO)
     try:
         # Attempt to extract the mass from the output
         mass = int([line for line in output.stdout.split("\n") if "mass of" in line][0].split()[-2])
     except IndexError:
         # If the mass is not found in the output, set it to 0 and print a warning
         mass = 0
-        log_with_details(f"Warning: Mass not found for PDB {pdb_name}. Setting mass to 0.", logging.WARNING)
-    log_with_details(f"Done!\n", logging.INFO)
+        print_and_log(f"Warning: Mass not found for PDB {pdb_name}. Setting mass to 0.", logging.WARNING)
+    print_and_log(f"Done!\n", logging.INFO)
     return mass
 
 def readmrc(mrc_path):
@@ -632,7 +637,7 @@ def readmrc(mrc_path):
     :param str mrc_path: The file path of the MRC file to read.
     :return numpy_array: The data of the MRC file as a NumPy array.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_path, mode='r') as mrc:
         data = mrc.data
         numpy_array = np.array(data)
@@ -646,7 +651,7 @@ def writemrc(mrc_path, numpy_array):
     :param strmrc_path: The file path of the MRC file to write.
     :param numpy_array: The NumPy array to be written.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with mrcfile.new(mrc_path, overwrite=True) as mrc:
         mrc.set_data(numpy_array)
 
@@ -661,31 +666,31 @@ def write_star_header(file_basename, apix, voltage, cs):
     :param float voltage: The voltage used in the conversion.
     :param float cs: The spherical aberration used in the conversion.
     """
-    log_with_details("", logging.DEBUG)
-    with open('%s.star' % file_basename, 'w') as the_file:
-        the_file.write('\ndata_\n\n')
-        the_file.write('loop_\n')
-        the_file.write('_rlnVersion #1\n')
-        the_file.write('3.1\n\n')  # Ensure compatibility with RELION 3.1 or newer
-        the_file.write('data_optics\n')
-        the_file.write('\n')
-        the_file.write('loop_\n')
-        the_file.write('_rlnOpticsGroupName #1\n')
-        the_file.write('_rlnOpticsGroup #2\n')
-        the_file.write('_rlnMicrographPixelSize #3\n')
-        the_file.write('_rlnVoltage #4\n')
-        the_file.write('_rlnSphericalAberration #5\n')
-        the_file.write('_rlnAmplitudeContrast #6\n')
-        the_file.write('_rlnImageDimensionality #7\n')
-        the_file.write('opticsGroup1 1 %f %f %f 0.1 2\n\n' % (apix, voltage, cs))
-        the_file.write('data_particles\n')
-        the_file.write('\n')
-        the_file.write('loop_\n')
-        the_file.write('_rlnMicrographName #1\n')
-        the_file.write('_rlnCoordinateX #2\n')
-        the_file.write('_rlnCoordinateY #3\n')
-        the_file.write('_rlnAnglePsi #4\n')
-        the_file.write('_rlnOpticsGroup #5\n')
+    print_and_log("", logging.DEBUG)
+    with open(f'{file_basename}.star', 'w') as star_file:
+        star_file.write('\ndata_\n\n')
+        star_file.write('loop_\n')
+        star_file.write('_rlnVersion #1\n')
+        star_file.write('3.1\n\n')  # Ensure compatibility with RELION 3.1 or newer
+        star_file.write('data_optics\n')
+        star_file.write('\n')
+        star_file.write('loop_\n')
+        star_file.write('_rlnOpticsGroupName #1\n')
+        star_file.write('_rlnOpticsGroup #2\n')
+        star_file.write('_rlnMicrographPixelSize #3\n')
+        star_file.write('_rlnVoltage #4\n')
+        star_file.write('_rlnSphericalAberration #5\n')
+        star_file.write('_rlnAmplitudeContrast #6\n')
+        star_file.write('_rlnImageDimensionality #7\n')
+        star_file.write(f"opticsGroup1 1 {apix} {voltage} {cs} 0.1 2\n\n")
+        star_file.write('data_particles\n')
+        star_file.write('\n')
+        star_file.write('loop_\n')
+        star_file.write('_rlnMicrographName #1\n')
+        star_file.write('_rlnCoordinateX #2\n')
+        star_file.write('_rlnCoordinateY #3\n')
+        star_file.write('_rlnAnglePsi #4\n')
+        star_file.write('_rlnOpticsGroup #5\n')
 
 def write_all_coordinates_to_star(structure_name, image_path, particle_locations):
     """
@@ -695,12 +700,12 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
     :param str image_path: The path of the image to add.
     :param list_of_tuples particle_locations: A list of tuples, where each tuple contains the x, y coordinates.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Open the star file once and write all coordinates
-    with open(f'{structure_name}.star', 'a') as the_file:
+    with open(f'{structure_name}.star', 'a') as star_file:
         for location in particle_locations:
             x_shift, y_shift = location
-            the_file.write(f'{image_path} {x_shift} {y_shift} 0 1\n')
+            star_file.write(f'{image_path} {x_shift} {y_shift} 0 1\n')
 
 def convert_point_to_model(point_file, output_file):
     """
@@ -709,15 +714,15 @@ def convert_point_to_model(point_file, output_file):
     :param str point_file: Path to the input .point file.
     :param str output_file: Output file path for the .mod file.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     try:
         # Run point2model command and give particles locations a circle of radius 3. Adjust the path if point2model is located elsewhere on your system.
         output = subprocess.run(["point2model", "-circle", "3", "-scat", point_file, output_file], capture_output=True, text=True, check=True)
-        log_with_details(output, logging.INFO)
+        print_and_log(output, logging.INFO)
     except subprocess.CalledProcessError:
-        log_with_details("Error while converting coordinates using point2model.", logging.WARNING)
+        print_and_log("Error while converting coordinates using point2model.", logging.WARNING)
     except FileNotFoundError:
-        log_with_details("point2model not found. Ensure IMOD is installed and point2model is in your system's PATH.", logging.WARNING)
+        print_and_log("point2model not found. Ensure IMOD is installed and point2model is in your system's PATH.", logging.WARNING)
 
 def write_mod_file(coordinates, output_file):
     """
@@ -726,7 +731,7 @@ def write_mod_file(coordinates, output_file):
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .mod file.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Step 1: Write the .point file
     point_file = os.path.splitext(output_file)[0] + ".point"
     with open(point_file, 'w') as f:
@@ -743,11 +748,35 @@ def write_coord_file(coordinates, output_file):
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .coord file.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     coord_file = os.path.splitext(output_file)[0] + ".coord"
     with open(coord_file, 'w') as f:
         for x, y in coordinates:
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
+
+def save_particle_coordinates(structure_name, particle_locations, output_path, imod_coordinate_file, coord_coordinate_file):
+    """
+    Saves particle coordinates in specified formats (.star, .mod, .coord).
+
+    :param str structure_name: Base name for the output files.
+    :param list particle_locations: List of particle locations as (x, y) tuples.
+    :param Namespace args: Command-line arguments containing user preferences for file outputs.
+    :param str prefix: Optional prefix for file names.
+    :param str suffix: Optional suffix for file names, e.g., for handling repeats.
+    """
+    print_and_log("", logging.DEBUG)
+    # Save .star file
+    write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations)
+
+    # Save IMOD .mod files
+    if imod_coordinate_file:
+        write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod")
+        #write_mod_file(removed_particles, os.path.splitext(point_file_path)[0] + "_removed.mod")  # Writes the particles that were removed
+
+    # Save .coord files
+    if coord_coordinate_file:
+        write_coord_file(particle_locations, os.path.splitext(output_path)[0] + ".coord")
+
 
 def estimate_mass_from_map(mrc_name):
     """
@@ -762,7 +791,7 @@ def estimate_mass_from_map(mrc_name):
 
     Note: This method assumes the map is already thresholded appropriately and that the entire volume above the threshold corresponds to protein. In practice, determining an effective threshold can be challenging and may require manual intervention or advanced image analysis techniques.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     protein_density_g_per_cm3 = 1.35  # Average density of protein
     angstroms_cubed_to_cm_cubed = 1e-24  # Conversion factor
 
@@ -791,7 +820,7 @@ def get_mrc_box_size(mrc_file_path):
     :raises FileNotFoundError: If the specified MRC file does not exist.
     :raises Exception: If there are issues reading the MRC file, indicating it might be corrupted or improperly formatted.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_file_path, permissive=True) as mrc:
         box_size = mrc.data.shape[0]  # Assuming the map is a cube
     return box_size
@@ -808,7 +837,7 @@ def read_polygons_from_json(json_file_path, expansion_distance, flip_x=False, fl
     :param bool expand: Boolean to determine if the polygons should be expanded.
     :return list_of_tuples: List of polygons where each polygon is a list of (x, y) coordinates.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     polygons = []
 
     # Read and parse the JSON file
@@ -851,8 +880,8 @@ def extend_and_shuffle_image_list(num_images, image_list_file):
     :param str image_list_file: The path to the file containing the list of images.
     :return list: A list of selected ice micrograph filenames and defoci.
     """
-    log_with_details("", logging.DEBUG)
-    log_with_details(f"Selecting {num_images} random ice micrographs...", logging.INFO)
+    print_and_log("", logging.DEBUG)
+    print_and_log(f"Selecting {num_images} random ice micrographs...", logging.INFO)
     # Read the list of available micrographs and their defoci
     with open(image_list_file, "r") as f:
         image_list = [line.strip() for line in f.readlines() if line.strip()]
@@ -869,7 +898,7 @@ def extend_and_shuffle_image_list(num_images, image_list_file):
         extended_list += random.sample(image_list, additional_images_needed)
         selected_images = sorted(extended_list)
 
-    log_with_details("Done!\n", logging.INFO)
+    print_and_log("Done!\n", logging.INFO)
 
     return selected_images
 
@@ -883,7 +912,7 @@ def non_uniform_random_number(min_val, max_val, threshold, weight):
     :param float weighted_value: The weight assigned to values below the threshold.
     :return int: A non-uniform random number within the specified range.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Create a population of numbers within the specified range
     population = range(min_val, max_val + 1)
     # Assign weights to each number, with 'weight' given to numbers below the threshold, and 1 for others
@@ -902,7 +931,7 @@ def next_divisible_by_primes(number, primes, count):
     :param int count: The number of primes to combine for finding the least common multiple.
     :return int: The smallest number divisible by the combination of primes.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Store the least common multiples of prime combinations
     least_common_multiples = []
 
@@ -928,7 +957,7 @@ def fourier_crop(image, downsample_factor):
     :return numpy.ndarray: Fourier cropped image.
     :raises ValueError: If input image is not 2D or if downsample factor is not valid.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Check if the input image is 2D
     if image.ndim != 2:
         raise ValueError("Input image must be 2D.")
@@ -971,7 +1000,7 @@ def downsample_micrograph(image_path, downsample_factor):
     :param str image_path: Path to the micrograph image file.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     try:
         # Determine the file format
         filename = os.path.basename(image_path)
@@ -1001,7 +1030,7 @@ def downsample_micrograph(image_path, downsample_factor):
             cv2.imwrite(binned_image_path, downsampled_image)
 
     except Exception as e:
-        log_with_details(f"Error processing {image_path}: {str(e)}", logging.INFO)
+        print_and_log(f"Error processing {image_path}: {str(e)}", logging.INFO)
 
 def parallel_downsample(image_directory, cpus, downsample_factor):
     """
@@ -1010,7 +1039,7 @@ def parallel_downsample(image_directory, cpus, downsample_factor):
     :param str image_directory: Local directory name where the micrographs are stored in mrc, png, and/or jpeg formats.
     :param int downsample_factor: Factor by which to downsample the images in both dimensions.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     image_extensions = ['.mrc', '.png', '.jpeg']
     image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
@@ -1034,7 +1063,7 @@ def downsample_star_file(input_star, output_star, downsample_factor):
     :param str output_star: Path to the output STAR file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with open(input_star, 'r') as infile, open(output_star, 'w') as outfile:
         # Flag to check if the line belongs to data_particles block
         in_data_particles_block = False
@@ -1063,7 +1092,7 @@ def downsample_point_file(input_point, output_point, downsample_factor):
     :param str output_point: Path to the output .point file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with open(input_point, 'r') as infile, open(output_point, 'w') as outfile:
         for line in infile:
             # Skip empty lines
@@ -1084,7 +1113,7 @@ def downsample_coord_file(input_coord, output_coord, downsample_factor):
     :param str output_coord: Path to the output .coord file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     with open(input_coord, 'r') as infile, open(output_coord, 'w') as outfile:
         for line in infile:
             # Skip empty lines
@@ -1097,6 +1126,34 @@ def downsample_coord_file(input_coord, output_coord, downsample_factor):
                 # Write the downsampled coordinates to the output file
                 outfile.write(f"{x:.2f} {y:.2f}\n")
 
+def downsample_coordinate_files(structure_name, binning, imod_coordinate_file, coord_coordinate_file):
+    """
+    Downsample coordinate files based on the specified binning factor.
+
+    :param str structure_name: Name of the structure.
+    :param int binning: The factor by which to downsample the coordinates.
+    :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    """
+    downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{binning}.star", binning)
+    if imod_coordinate_file:
+        for filename in os.listdir(f"{structure_name}/"):
+            if filename.endswith(".point"):
+                input_file = os.path.join(f"{structure_name}/", filename)
+                output_point_file = os.path.join(f"{structure_name}/bin_{binning}/", filename.replace('.point', f'_bin{binning}.point'))
+                # First downsample the .point files
+                downsample_point_file(input_file, output_point_file, binning)
+                # Then convert all of the .point files to .mod files
+                mod_file = os.path.splitext(output_point_file)[0] + ".mod"
+                convert_point_to_model(output_point_file, mod_file)
+    if coord_coordinate_file:
+        for filename in os.listdir(f"{structure_name}/"):
+            if filename.endswith(".coord"):
+                input_file = os.path.join(f"{structure_name}/", filename)
+                output_coord_file = os.path.join(f"{structure_name}/bin_{binning}/", filename.replace('.coord', f'_bin{binning}.coord'))
+                # First downsample the .coord files
+                downsample_coord_file(input_file, output_coord_file, binning)
+
 def read_star_particles(star_file_path):
     """
     Dynamically reads the 'data_particles' section from a STAR file and returns a DataFrame
@@ -1106,7 +1163,7 @@ def read_star_particles(star_file_path):
     :return dataframe: DataFrame with columns for micrograph names, particle coordinates, angles, and optics group.
     :raises ValueError: If data_particles section of the STAR file is not found.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Track the line number for where data begins
     data_start_line = None
     with open(star_file_path, 'r') as file:
@@ -1138,7 +1195,7 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
     :param str output_mrc: The file path to save the trimmed volume.
     :return int: A random number of particles up to a maximum of how many will fit in the micrograph.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     mrc_array = readmrc(input_mrc)
     micrograph_array = readmrc(input_micrograph)
 
@@ -1189,7 +1246,7 @@ def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons
     :param list_of_tuples polygons: List of polygons where each polygon is a list of (x, y) coordinates.
     :return list_of_tuples : List of (x, y) coordinates of particle locations that are outside the polygons.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # An empty list to store particle locations that are outside the polygons
     filtered_particle_locations = []
 
@@ -1217,20 +1274,25 @@ def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons
 
     return filtered_particle_locations
 
-def generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, dist_type, non_random_dist_type):
+def generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type):
     """
-    Generate random locations for particles within an image.
+    Generate random/non-random locations for particles within an image.
 
     :param tuple image_size: The size of the image as a tuple (width, height).
     :param int num_small_images: The number of small images or particles to generate coordinates for.
     :param int half_small_image_width: Half the width of a small image.
     :param int border_distance: The minimum distance between particles and the image border.
+    :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
     :param str dist_type: Particle location generation distribution type - 'random' or 'non-random'.
     :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non-random' - 'circular', 'inverse circular', or 'gaussian'.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     width, height = image_size
+
+    # If edge_particles is set to True, allow particles to go all the way to the edge of the micrograph
+    border_distance = 0 if edge_particles else max(border_distance, half_small_image_width)
+
     particle_locations = []
 
     def is_far_enough(new_particle_location, particle_locations, half_small_image_width):
@@ -1355,7 +1417,7 @@ def process_slice(args):
                  - electronic_noise_std float: Standard deviation of the Gaussian electronic noise.
     :return numpy_array: A 3D numpy array representing the processed slice of the particle stack with added noise.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Unpack the arguments
     slice, num_frames, scaling_factor, electronic_noise_std = args
 
@@ -1407,7 +1469,7 @@ def add_combined_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0
     :param float electronic_noise_std: Standard deviation of the Gaussian electronic noise.
     :return numpy_array: 3D numpy array representing the stack of noisy particle images.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Split the particle stack into slices
     slices = np.array_split(particle_stack, num_cores)
 
@@ -1427,13 +1489,14 @@ def add_combined_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0
 def create_collage(large_image, small_images, particle_locations):
     """
     Create a collage of small images on a blank canvas of the same size as the large image.
+    Particles that would extend past the edge of the large image are trimmed before being added.
 
     :param numpy_array large_image: Shape of the large image.
     :param numpy_array small_images: List of small images to place on the canvas.
     :param list_of_tuples particle_locations: Coordinates where each small image should be placed.
     :return numpy_array: Collage of small images.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     collage = np.zeros(large_image.shape, dtype=large_image.dtype)
 
     for i, small_image in enumerate(small_images):
@@ -1444,18 +1507,35 @@ def create_collage(large_image, small_images, particle_locations):
         x_end = x_start + small_image.shape[0]
         y_end = y_start + small_image.shape[1]
 
-        collage[y_start:y_end, x_start:x_end] += small_image
+        # Calculate the region of the small image that fits within the large image
+        x_start_trim = max(0, -x_start)
+        y_start_trim = max(0, -y_start)
+        x_end_trim = min(small_image.shape[0], large_image.shape[1] - x_start)
+        y_end_trim = min(small_image.shape[1], large_image.shape[0] - y_start)
+
+        # Adjust start and end coordinates to ensure they fall within the large image
+        x_start = max(0, x_start)
+        y_start = max(0, y_start)
+        x_end = min(large_image.shape[1], x_end)
+        y_end = min(large_image.shape[0], y_end)
+
+        # Add the trimmed small image to the collage
+        collage[y_start:y_end, x_start:x_end] += small_image[y_start_trim:y_end_trim, x_start_trim:x_end_trim]
 
     return collage
 
-def blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance):
+def blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
 
     :param numpy_array large_image: The large image where small images will be blended into.
     :param numpy_array small_images: The list of small images or particles to be blended.
+    :param float scale_percent: The percentage to scale the volume for trimming.
+    :param int half_small_image_width: Half the width of a small image.
     :param list_of_tuples particle_locations: The locations of the particles within the large image.
+    :param int border_distance: The minimum distance between particles and the image border.
+    :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
     :param float scale: The scale factor to adjust the intensity of the particles.
     :param str structure_name: The name of the structure file.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
@@ -1469,7 +1549,7 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
     :param int polygon_expansion_distance: Distance by which to expand the polygons.
     :return numpy_array: The blended large image.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     json_file_path = os.path.splitext(large_image_path)[0] + ".json"
     if not no_junk_filter:
         if os.path.exists(json_file_path):
@@ -1478,14 +1558,42 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
             # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
             filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-            #removed_particles = [item for item in particle_locations if item not in filtered_particle_locations]  # Makes a list of particles that were removed
-            log_with_details(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.", logging.INFO)
+            print_and_log(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.", logging.INFO)
         else:
-            log_with_details(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}", logging.WARNING)
+            print_and_log(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}", logging.WARNING)
             filtered_particle_locations = particle_locations
     else:
-        log_with_details("Skipping junk filtering (ie. not using JSON file)", logging.INFO)
+        print_and_log("Skipping junk filtering (ie. not using JSON file)", logging.INFO)
         filtered_particle_locations = particle_locations
+
+    # Remove edge particles from coordinate files if requested
+    if not save_edge_coordinates:
+        remaining_particle_locations = filtered_particle_locations[:]
+
+        # Loop through each particle location to check its proximity to the edge
+        for x, y in filtered_particle_locations:
+            # Calculate the effective borders for this particle
+            reduced_sidelength = int(np.ceil(half_small_image_width * 100/(100 + scale_percent)))  # Unscale the sidelength, which was previously scaled up to capture more CTF
+            left_edge = x - reduced_sidelength
+            right_edge = x + reduced_sidelength
+            top_edge = y - reduced_sidelength
+            bottom_edge = y + reduced_sidelength
+
+            # Determine if the particle is too close to any edge of the large image
+            if (left_edge < border_distance or right_edge > large_image.shape[1] - border_distance or
+                top_edge < border_distance or bottom_edge > large_image.shape[0] - border_distance):
+                # Remove this particle's location if we're not saving edge coordinates
+                if not save_edge_coordinates:
+                    remaining_particle_locations.remove((x, y))
+
+        num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
+        if num_particles_removed > 0:
+            print_and_log(f"{num_particles_removed} particles removed from coordinate file(s) due to being too close to the edge.", logging.INFO)
+        else:
+            print_and_log("No particles removed from coordinate file(s) due to being too close to the edge.", logging.INFO)
+
+        # Use the remaining locations for further processing
+        filtered_particle_locations = remaining_particle_locations
 
     # Normalize the input micrograph to itself
     large_image[:, :] = (large_image[:, :] - large_image[:, :].mean())/large_image[:, :].std()
@@ -1498,27 +1606,21 @@ def blend_images(large_image, small_images, particle_locations, scale, structure
     # Normalize the resulting micrograph to itself
     blended_image = (blended_image - blended_image.mean()) / blended_image.std()
 
-    write_all_coordinates_to_star(structure_name, output_path + ".mrc", filtered_particle_locations)
-
-    # Make an Imod .mod coordinates file if requested
-    if imod_coordinate_file:
-        write_mod_file(filtered_particle_locations, os.path.splitext(output_path)[0] + ".mod")
-        #write_mod_file(removed_particles, os.path.splitext(output_path)[0] + "_removed.mod")  # Writes the particles that were removed
-
-    # Make a .coord coordinates file if requested
-    if coord_coordinate_file:
-        write_coord_file(filtered_particle_locations, os.path.splitext(output_path)[0] + ".coord")
+    save_particle_coordinates(structure_name, filtered_particle_locations, output_path, imod_coordinate_file, coord_coordinate_file)
 
     return blended_image
 
-def add_images(large_image_path, small_images, structure_name, border_distance, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
+def add_images(large_image_path, small_images, scale_percent, structure_name, border_distance, edge_particles, save_edge_coordinates, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
     :param str large_image_path: The file path of the large image or micrograph.
     :param str small_images: The file path of the small images or particles.
+    :param float scale_percent: The percentage to scale the volume for trimming.
     :param str structure_name: The name of the structure file.
     :param int border_distance: The minimum distance between particles and the image border.
+    :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
+    :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
     :param float scale: The scale factor to adjust the intensity of the particles.
     :param str output_path: The file path to save the resulting micrograph.
     :param str dist_type: The type of distribution (random or non-random) for placing particles in micrographs.
@@ -1536,41 +1638,39 @@ def add_images(large_image_path, small_images, structure_name, border_distance, 
     :param int jpeg_quality: Quality of the JPEG image.
     :return int: The actual number of particles added to the micrograph.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Read micrograph and particles, and get some information
     large_image = readmrc(large_image_path)
     small_images = readmrc(small_images)
     image_size = np.flip(large_image.shape)
     num_small_images = len(small_images)
-
-    # Don't let particles be closer to the edge of the micrograph than half of the particle sidelength
     half_small_image_width = int(small_images.shape[1]/2)
-    border_distance = max(border_distance, small_images.shape[1]/2)
 
-    particle_locations = generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, dist_type, non_random_dist_type)
+    # Generates unfiltered particle locations, which may be filtered of junk and/or edgee particles in blend_images
+    particle_locations = generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image = blend_images(large_image, small_images, particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
     else:
-        log_with_details(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
-        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], particle_locations, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
+        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percenthalf_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
-        log_with_details(f"\nWriting synthetic micrograph as a MRC file: {output_path}.mrc...\n", logging.INFO)
+        print_and_log(f"\nWriting synthetic micrograph as a MRC file: {output_path}.mrc...\n", logging.INFO)
         writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image))  # Write mrc normalized with mean of 0 and std of 1
     if save_as_png:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        log_with_details(f"\nWriting synthetic micrograph as a PNG file: {output_path}.png...\n", logging.INFO)
+        print_and_log(f"\nWriting synthetic micrograph as a PNG file: {output_path}.png...\n", logging.INFO)
         cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
     if save_as_jpeg:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        log_with_details(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...\n", logging.INFO)
+        print_and_log(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...\n", logging.INFO)
         cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
 
     return len(particle_locations)
@@ -1629,10 +1729,10 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
         for micrograph_name, particle_rows in grouped_df:
             micrograph_path = os.path.join(micrograph_name)
             if not os.path.exists(micrograph_path):
-                log_with_details(f"Micrograph not found: {micrograph_path}", logging.WARNING)
+                print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
                 continue
             
-            log_with_details(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
+            print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
             future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size)
             futures.append(future)
         
@@ -1654,7 +1754,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
     :return int int: The total number of particles actually added to all of the micrographs, and the box size of the projected volume.
     """
-    log_with_details("", logging.DEBUG)
+    print_and_log("", logging.DEBUG)
     # Convert short distribution to full distribution name
     distribution_mapping = {'r': 'random', 'n': 'non-random'}
     distribution = distribution_mapping.get(args.distribution, args.distribution)
@@ -1666,11 +1766,11 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     # Convert PDB to MRC for PDBs
     if structure_type == "pdb":
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
-        log_with_details(f"Mass of PDB {structure_name}: {mass} kDa", logging.INFO)
+        print_and_log(f"Mass of PDB {structure_name}: {mass} kDa", logging.INFO)
         fudge_factor = 5
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
-        log_with_details(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
+        print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
         fudge_factor = 5
 
     # Write STAR header for the current synthetic dataset
@@ -1698,9 +1798,9 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         repeat_suffix = f"{repeat_number}" if repeat_number > 1 else ""
 
         extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(structure_index)) + len(str(total_structures)) + len(str(fname)))
-        log_with_details(f"\n-----------------------------------------------------------{extra_hyphens}", logging.WARNING)
-        log_with_details(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
-        log_with_details(f"-----------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
+        print_and_log(f"\n-----------------------------------------------------------{extra_hyphens}", logging.WARNING)
+        print_and_log(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
+        print_and_log(f"-----------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
 
         # Random ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there is a fudge factor of 5 just so the user gets a number that feels right)
@@ -1714,14 +1814,14 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         # 1. If the user provides a value for `args.num_particles` and it is less than or equal to the `max_num_particles`, use it.
         # 2. If the user does not provide a value, use `rand_num_particles`.
         # 3. If the user's provided value exceeds `max_num_particles`, use `max_num_particles` instead.
-        log_with_details(f"Trimming the mrc...", logging.INFO)
+        print_and_log(f"Trimming the mrc...", logging.INFO)
         rand_num_particles, max_num_particles = trim_vol_return_rand_particle_number(f"{structure_name}.mrc", f"{args.image_directory}/{fname}.mrc", args.scale_percent, f"{structure_name}.mrc")
         num_particles = args.num_particles if args.num_particles and args.num_particles <= max_num_particles else (rand_num_particles if not args.num_particles else max_num_particles)
 
         if args.num_particles:
-            log_with_details(f"Attempting to add {int(num_particles)} particles to the micrograph...", logging.INFO)
+            print_and_log(f"Attempting to add {int(num_particles)} particles to the micrograph...", logging.INFO)
         else:
-            log_with_details("Choosing a random number of particles to attempt to add to the micrograph...", logging.INFO)
+            print_and_log("Choosing a random number of particles to attempt to add to the micrograph...", logging.INFO)
 
         # Set the particle distribution type. If none is given (default), then 30% of the time it will choose random and 70% non-random
         dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.3, 0.7])
@@ -1740,9 +1840,9 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         else:
             non_random_dist_type = None
 
-        log_with_details(f"Done! {num_particles} particles will be added to the micrograph.\n", logging.INFO)
+        print_and_log(f"Done! {num_particles} particles will be added to the micrograph.\n", logging.INFO)
 
-        log_with_details(f"Projecting the structure volume {num_particles} times...", logging.INFO)
+        print_and_log(f"Projecting the structure volume {num_particles} times...", logging.INFO)
         # Determine orientation generator arguments based on user input
         if args.preferred_orientation:
             # Define the orientation generator based on user input and set fixed Euler angle
@@ -1760,27 +1860,27 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         #output = subprocess.run(["e2project3d.py", f"{structure_name}.mrc", f"--outfile=temp_{structure_name}.hdf", 
         #                f"--orientgen=rand:n={num_particles}:phitoo={args.phitoo}", f"--parallel=thread:{args.cpus}"], capture_output=True, text=True).stdout
-        log_with_details(output, logging.INFO)
-        log_with_details("Done!\n", logging.INFO)
+        print_and_log(output, logging.INFO)
+        print_and_log("Done!\n", logging.INFO)
 
         output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
-        log_with_details(output, logging.INFO)
-        log_with_details(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution and adding Gaussian (white) noise...", logging.INFO)
+        print_and_log(output, logging.INFO)
+        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution and adding Gaussian (white) noise...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         noisy_particles = add_combined_noise(particles, args.num_simulated_particle_frames, args.cpus, 0.3)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
-        log_with_details("Done!\n", logging.INFO)
+        print_and_log("Done!\n", logging.INFO)
 
-        log_with_details(f"Applying CTF based on the recorded defocus ({float(defocus):.4f} microns) and microscope parameters (Voltage: {args.voltage}keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) that were used to collect the micrograph...", logging.INFO)
+        print_and_log(f"Applying CTF based on the recorded defocus ({float(defocus):.4f} microns) and microscope parameters (Voltage: {args.voltage}keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) that were used to collect the micrograph...", logging.INFO)
         output = subprocess.run(["e2proc2d.py", "--mult=-1", 
                         "--process", f"math.simulatectf:ampcont={args.ampcont}:bfactor=50:apix={args.apix}:cs={args.Cs}:defocus={defocus}:voltage={args.voltage}", 
                         "--process", "normalize.edgemean", f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"], capture_output=True, text=True).stdout
-        log_with_details(output, logging.INFO)
-        log_with_details("Done!\n", logging.INFO)
+        print_and_log(output, logging.INFO)
+        print_and_log("Done!\n", logging.INFO)
 
-        log_with_details(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", logging.INFO)
-        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", structure_name, args.border, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
-        log_with_details("Done!", logging.INFO)
+        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", logging.INFO)
+        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
+        print_and_log("Done!", logging.INFO)
         total_num_particles += num_particles
 
         # Cleanup
@@ -1791,54 +1891,28 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     # Downsample micrographs and coordinate files
     if args.binning > 1:
         # Downsample micrographs
-        log_with_details(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping...\n", logging.INFO)
+        print_and_log(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping...\n", logging.INFO)
         parallel_downsample(f"{structure_name}/", args.cpus, args.binning)
 
         # Downsample coordinate files
-        downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{args.binning}.star", args.binning)
-        if args.imod_coordinate_file:
-            for filename in os.listdir(f"{structure_name}/"):
-                if filename.endswith(".point"):
-                    input_file = os.path.join(f"{structure_name}/", filename)
-                    output_point_file = os.path.join(f"{structure_name}/bin_{args.binning}/", filename.replace('.point', f'_bin{args.binning}.point'))
-                    # First downsample the .point files
-                    downsample_point_file(input_file, output_point_file, args.binning)
-                    # Then convert all of the .point files to .mod files
-                    mod_file = os.path.splitext(output_point_file)[0] + ".mod"
-                    convert_point_to_model(output_point_file, mod_file)
-        if args.coord_coordinate_file:
-            for filename in os.listdir(f"{structure_name}/"):
-                if filename.endswith(".coord"):
-                    input_file = os.path.join(f"{structure_name}/", filename)
-                    output_coord_file = os.path.join(f"{structure_name}/bin_{args.binning}/", filename.replace('.coord', f'_bin{args.binning}.coord'))
-                    # First downsample the .coord files
-                    downsample_coord_file(input_file, output_coord_file, args.binning)
+        downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
 
         if not args.keep:
-            # Delete the non-downsampled micrographs and coordinate files and move the binned ones to the parent directory
-            log_with_details("Removing non-downsamlpled micrographs...", logging.INFO)
+            print_and_log("Removing non-downsamlpled micrographs...", logging.INFO)
             bin_dir = f"{structure_name}/bin_{args.binning}/"
-            for file in glob.glob(f"{structure_name}/*.mrc"):
-                os.remove(file)
-            for file in glob.glob(f"{structure_name}/*.png"):
-                os.remove(file)
-            for file in glob.glob(f"{structure_name}/*.jpeg"):
-                os.remove(file)
-            for file in glob.glob(f"{structure_name}/*.mod"):
-                os.remove(file)
-            for file in glob.glob(f"{structure_name}/*.coord"):
-                os.remove(file)
-            for file in glob.glob(f"{structure_name}/bin_{args.binning}/*.mrc"):
-                shutil.move(file, f"{structure_name}/")
-            for file in glob.glob(f"{structure_name}/bin_{args.binning}/*.png"):
-                shutil.move(file, f"{structure_name}/")
-            for file in glob.glob(f"{structure_name}/bin_{args.binning}/*.jpeg"):
-                shutil.move(file, f"{structure_name}/")
-            for file in glob.glob(f"{structure_name}/bin_{args.binning}/*.mod"):
-                shutil.move(file, f"{structure_name}/")
-            for file in glob.glob(f"{structure_name}/bin_{args.binning}/*.coord"):
-                shutil.move(file, f"{structure_name}/")
-            shutil.rmtree(f"{structure_name}/bin_{args.binning}/")
+
+            # Delete the non-downsampled micrographs and coordinate files
+            file_extensions = ["mrc", "png", "jpeg", "mod", "coord"]
+            for ext in file_extensions:
+                for file in glob.glob(f"{structure_name}/*.{ext}"):
+                    os.remove(file)
+
+            # Move the binned files to the parent directory
+            for ext in file_extensions:
+                for file in glob.glob(f"{bin_dir}/*.{ext}"):
+                    shutil.move(file, f"{structure_name}/")
+
+            shutil.rmtree(bin_dir)
             shutil.move(f"{structure_name}_bin{args.binning}.star", f"{structure_name}/")
             os.remove(f"{structure_name}.star")
         else:
@@ -1881,7 +1955,7 @@ def main():
 
     if args.crop_particles and not args.mrc:
         args.mrc = True
-        log_with_details(f"Notice: Since cropping (--crop_particles) is requested, then --mrc must be turned on. --mrc is now set to True.", logging.INFO)
+        print_and_log(f"Notice: Since cropping (--crop_particles) is requested, then --mrc must be turned on. --mrc is now set to True.", logging.INFO)
 
     if not (args.mrc or args.png or args.jpeg):
         parser.error("No format specified for saving images. Please specify at least one format.")
@@ -1892,11 +1966,11 @@ def main():
         formatted_output += f"{arg}: {value};\n"
     argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
 
-    log_with_details("-----------------------------------------------------------------------------------------------", logging.WARNING)
-    log_with_details(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
-    log_with_details("VirtualIce arguments:\n", logging.WARNING)
-    log_with_details(argument_printout, logging.WARNING)
-    log_with_details("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
+    print_and_log("-----------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
+    print_and_log("VirtualIce arguments:\n", logging.WARNING)
+    print_and_log(argument_printout, logging.WARNING)
+    print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
 
     # Loop over each provided structure and generate micrographs. Skip a structure if it doesn't download/exist
     total_structures = len(args.structures)
@@ -1912,7 +1986,7 @@ def main():
                 task = executor.submit(generate_micrographs, args, structure_name, structure_type, structure_index, total_structures)
                 tasks.append((task, structure_name))  # Store task with its associated structure_name
             else:
-                log_with_details(f"Skipping structure due to an error or non-existence: {structure_input} (if you're trying to get a random structure, use the `-s r` flag)", logging.WARNING)
+                print_and_log(f"Skipping structure due to an error or non-existence: {structure_input} (if you're trying to get a random structure, use the `-s r` flag)", logging.WARNING)
 
         # Wait for all tasks to complete, aggregate results, and crop particles if requested
         for task, structure_name in tasks:
@@ -1926,21 +2000,21 @@ def main():
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.structures)
-    log_with_details("\n---------------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    log_with_details(f"Total time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} with a total of {total_number_of_particles} particles: {time_str}", logging.WARNING)
-    log_with_details("---------------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
+    print_and_log("\n---------------------------------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log(f"Total time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} with a total of {total_number_of_particles} particles: {time_str}", logging.WARNING)
+    print_and_log("---------------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
-    log_with_details("One .star file per structure can be found in the run directories.\n", logging.WARNING)
+    print_and_log("One .star file per structure can be found in the run directories.\n", logging.WARNING)
 
     if args.imod_coordinate_file:
-        log_with_details("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
-        log_with_details("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files.)\n", logging.WARNING)
+        print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
+        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files.)\n", logging.WARNING)
 
     if args.coord_coordinate_file:
-        log_with_details("One (x y) .coord file per micrograph can be found in the run directories.\n", logging.WARNING)
+        print_and_log("One (x y) .coord file per micrograph can be found in the run directories.\n", logging.WARNING)
 
     if args.crop_particles:
-        log_with_details("Extracted particles can be found in the 'Particles' folder in the run directories.\n", logging.WARNING)
+        print_and_log("Extracted particles can be found in the 'Particles' folder in the run directories.\n", logging.WARNING)
 
 if __name__ == "__main__":
     main()
