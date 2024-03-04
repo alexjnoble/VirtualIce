@@ -449,7 +449,7 @@ def download_emdb(emdb_id, suppress_errors=False):
     try:
         # Download the gzipped map file
         if not suppress_errors:
-            print_and_log(f"Downloading EMD-{emdb_id}...", logging.WARNING)
+            print_and_log(f"Downloading EMD-{emdb_id}...", logging.INFO)
         request.urlretrieve(url, local_filename)
 
         # Decompress the downloaded file
@@ -1406,6 +1406,26 @@ def generate_particle_locations(image_size, num_small_images, half_small_image_w
 
     return particle_locations
 
+def estimate_noise_parameters(mrc_path):
+    """
+    Estimate Poisson (shot noise) and Gaussian (readout and electronic noise) parameters from a single MRC image.
+
+    :param mrc_path: Path to the MRC file.
+    :return float, float: A tuple containing the estimated Poisson variance (mean) and Gaussian variance.
+    """
+    with mrcfile.open(mrc_path, mode='r') as mrc:
+        image = mrc.data.astype(np.float32)
+        
+        # Calculate mean and variance across the image
+        mean = np.mean(image)
+        variance = np.var(image)
+        
+        # Poisson noise component is approximated by the mean
+        # Gaussian noise component is the excess variance over the Poisson component
+        gaussian_variance = variance - mean
+        
+        return mean, gaussian_variance
+
 def process_slice(args):
     """
     Process a slice of the particle stack by adding Poisson and Gaussian electronic noise.
@@ -1419,7 +1439,7 @@ def process_slice(args):
     """
     print_and_log("", logging.DEBUG)
     # Unpack the arguments
-    slice, num_frames, scaling_factor, electronic_noise_std = args
+    slice, num_frames, scaling_factor, gaussian_variance = args
 
     # Create an empty array to store the noisy slice of the particle stack
     noisy_slice = np.zeros_like(slice, dtype=np.float32)
@@ -1441,7 +1461,7 @@ def process_slice(args):
             noisy_frame[mask] = np.random.poisson(particle[mask])
 
             # Generate Gaussian electronic noise and restrict it to the mask. This noise is not modulated by the original pixel values; it represents uniform camera readout noise.
-            electronic_noise = np.round(np.random.normal(loc=0, scale=electronic_noise_std, size=particle.shape)).astype(np.int32)
+            electronic_noise = np.round(np.random.normal(loc=0, scale=gaussian_variance, size=particle.shape)).astype(np.int32)
             electronic_noise *= mask.astype(np.int32)
 
             # Add the electronic noise to the noisy frame
@@ -1452,7 +1472,7 @@ def process_slice(args):
 
     return noisy_slice
 
-def add_combined_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0, electronic_noise_std=1.0):
+def add_combined_noise(particle_stack, num_frames, num_cores, avg_gaussian_variance=1.0, scaling_factor=1.0):
     """
     Add Poisson and Gaussian electronic noise to a stack of particle images.
 
@@ -1466,7 +1486,7 @@ def add_combined_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0
     :param int num_frames: Number of frames to simulate for each particle image.
     :param int num_cores: Number of CPU cores to parallelize slices across.
     :param float scaling_factor: Factor by which to scale the particle images before adding noise.
-    :param float electronic_noise_std: Standard deviation of the Gaussian electronic noise.
+    :param float avg_gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
     :return numpy_array: 3D numpy array representing the stack of noisy particle images.
     """
     print_and_log("", logging.DEBUG)
@@ -1474,7 +1494,7 @@ def add_combined_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0
     slices = np.array_split(particle_stack, num_cores)
 
     # Prepare the arguments for each slice
-    args = [(s, num_frames, scaling_factor, electronic_noise_std) for s in slices]
+    args = [(s, num_frames, scaling_factor, avg_gaussian_variance) for s in slices]
 
     # Create a pool of worker processes
     with Pool(num_cores) as pool:
@@ -1654,7 +1674,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
         result_image = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
     else:
         print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
-        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percenthalf_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
@@ -1677,7 +1697,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
 
 def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     """
-    Crops particles for a single micrograph.
+    Crops particles from a single micrograph.
     
     :param str micrograph_path: Path to the micrograph.
     :param DataFrame particle_rows: DataFrame rows of particles to be cropped from the micrograph.
@@ -1694,8 +1714,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
 
             cropped_particle = mrc.data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
             particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
-            with mrcfile.new(particle_path, overwrite=True) as mrc_particle:
-                mrc_particle.set_data(cropped_particle.astype(np.float32))
+            writemrc(particle_path, cropped_particle.astype(np.float32))
 
 def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     """
@@ -1771,7 +1790,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
         print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
-        fudge_factor = 5
+        fudge_factor = 4
 
     # Write STAR header for the current synthetic dataset
     write_star_header(structure_name, args.apix, args.voltage, args.Cs)
@@ -1797,10 +1816,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         repeat_number = micrograph_usage_count[fname]
         repeat_suffix = f"{repeat_number}" if repeat_number > 1 else ""
 
-        extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(structure_index)) + len(str(total_structures)) + len(str(fname)))
-        print_and_log(f"\n-----------------------------------------------------------{extra_hyphens}", logging.WARNING)
+        extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(structure_name)) + len(str(structure_index)) + len(str(total_structures)) + len(str(fname)))
+        print_and_log(f"\n-------------------------------------------------------{extra_hyphens}", logging.WARNING)
         print_and_log(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
-        print_and_log(f"-----------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
+        print_and_log(f"-------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
 
         # Random ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there is a fudge factor of 5 just so the user gets a number that feels right)
@@ -1867,7 +1886,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution and adding Gaussian (white) noise...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
-        noisy_particles = add_combined_noise(particles, args.num_simulated_particle_frames, args.cpus, 0.3)
+        mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
+        noisy_particles = add_combined_noise(particles, args.num_simulated_particle_frames, args.cpus, gaussian_variance)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
         print_and_log("Done!\n", logging.INFO)
 
