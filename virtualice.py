@@ -147,7 +147,34 @@ def parse_arguments():
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Set verbosity level
+    args.verbosity = 0 if args.quiet else args.verbosity
+
+    # Setup logging based on the verbosity level
+    setup_logging(args.verbosity)
+
+    if args.crop_particles and not args.mrc:
+        args.mrc = True
+        print_and_log(f"Notice: Since cropping (--crop_particles) is requested, then --mrc must be turned on. --mrc is now set to True.", logging.INFO)
+
+    if not (args.mrc or args.png or args.jpeg):
+        parser.error("No format specified for saving images. Please specify at least one format.")
+
+    # Print all arguments for the user's information
+    formatted_output = ""
+    for arg, value in vars(args).items():
+        formatted_output += f"{arg}: {value};\n"
+    argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
+
+    print_and_log("-----------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
+    print_and_log("VirtualIce arguments:\n", logging.WARNING)
+    print_and_log(argument_printout, logging.WARNING)
+    print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
+
+    return args
 
 def check_num_particles(value):
     """
@@ -1628,7 +1655,7 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
 
     save_particle_coordinates(structure_name, filtered_particle_locations, output_path, imod_coordinate_file, coord_coordinate_file)
 
-    return blended_image
+    return blended_image, filtered_particle_locations
 
 def add_images(large_image_path, small_images, scale_percent, structure_name, border_distance, edge_particles, save_edge_coordinates, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
     """
@@ -1666,15 +1693,15 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     num_small_images = len(small_images)
     half_small_image_width = int(small_images.shape[1]/2)
 
-    # Generates unfiltered particle locations, which may be filtered of junk and/or edgee particles in blend_images
+    # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
     particle_locations = generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image, filtered_particle_locations = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
     else:
         print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
-        result_image = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image, filtered_particle_locations = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
@@ -1693,7 +1720,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
         print_and_log(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...\n", logging.INFO)
         cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
 
-    return len(particle_locations)
+    return len(particle_locations), len(filtered_particle_locations)
 
 def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     """
@@ -1799,7 +1826,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     selected_images = extend_and_shuffle_image_list(args.num_images, args.image_list_file)
 
     # Main Loop
-    total_num_particles = 0
+    total_num_particles_projected = 0
+    total_num_particles_with_saved_coordinates = 0
     current_micrograph_number = 0
     micrograph_usage_count = {}  # Dictionary to keep track of repeating micrograph names if the image list was extended
     for line in selected_images:
@@ -1847,15 +1875,16 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         if dist_type == 'non-random':
             # Randomly select a non-random distribution, weighted towards inverse circular and gaussian because they are more common. Note: gaussian can create 1-5 gaussian blobs on the micrograph
             non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0.14, 0.5, 0.36])
-            if non_random_dist_type == 'circular':
-                # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
-                num_particles = max(num_particles // 2, 2)  # Minimum number of particles is 2
-            elif non_random_dist_type == 'inverse circular':
-                # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
-                num_particles = max(num_particles * 2 // 3, 2)
-            elif non_random_dist_type == 'gaussian':
-                # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
-                num_particles = max(num_particles // 4, 2)
+            if not args.num_particles:
+                if non_random_dist_type == 'circular':
+                    # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
+                    num_particles = max(num_particles // 2, 2)  # Minimum number of particles is 2
+                elif non_random_dist_type == 'inverse circular':
+                    # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
+                    num_particles = max(num_particles * 2 // 3, 2)
+                elif non_random_dist_type == 'gaussian':
+                    # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
+                    num_particles = max(num_particles // 4, 2)
         else:
             non_random_dist_type = None
 
@@ -1899,9 +1928,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", logging.INFO)
-        num_particles = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
+        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
         print_and_log("Done!", logging.INFO)
-        total_num_particles += num_particles
+        total_num_particles_projected += num_particles_projected
+        total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
         # Cleanup
         for temp_file in [f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc", f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"]:
@@ -1941,9 +1971,9 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     else:
         shutil.move(f"{structure_name}.star", f"{structure_name}/")
 
-    # Log structure name, mass, and number of micrographs generated
-    with open("structure_mass_numimages_numparticles.txt", "a") as f:
-        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles}\n")
+    # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
+    with open("structure_mass_numimages_numparticlesprojected_numparticlessaved.txt", "a") as f:
+        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
 
     box_size = get_mrc_box_size(f"{structure_name}.mrc")
 
@@ -1960,41 +1990,17 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-    return total_num_particles, box_size
+    return total_num_particles_projected, total_num_particles_with_saved_coordinates, box_size
 
 def main():
     start_time = time.time()
 
     args = parse_arguments()
 
-    # Set verbosity level
-    args.verbosity = 0 if args.quiet else args.verbosity
-
-    # Setup logging based on the verbosity level
-    setup_logging(args.verbosity)
-
-    if args.crop_particles and not args.mrc:
-        args.mrc = True
-        print_and_log(f"Notice: Since cropping (--crop_particles) is requested, then --mrc must be turned on. --mrc is now set to True.", logging.INFO)
-
-    if not (args.mrc or args.png or args.jpeg):
-        parser.error("No format specified for saving images. Please specify at least one format.")
-
-    # Print all arguments for the user's information
-    formatted_output = ""
-    for arg, value in vars(args).items():
-        formatted_output += f"{arg}: {value};\n"
-    argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
-
-    print_and_log("-----------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
-    print_and_log("VirtualIce arguments:\n", logging.WARNING)
-    print_and_log(argument_printout, logging.WARNING)
-    print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
-
     # Loop over each provided structure and generate micrographs. Skip a structure if it doesn't download/exist
     total_structures = len(args.structures)
-    total_number_of_particles = 0
+    total_number_of_particles_projected = 0
+    total_number_of_particles_with_saved_coordinates = 0
     with ProcessPoolExecutor(max_workers=args.parallel_processes) as executor:
         # Prepare a list of tasks
         tasks = []
@@ -2010,8 +2016,9 @@ def main():
 
         # Wait for all tasks to complete, aggregate results, and crop particles if requested
         for task, structure_name in tasks:
-            number_of_particles, box_size = task.result()
-            total_number_of_particles += number_of_particles
+            num_particles_projected, num_particles_with_saved_coordinates, box_size = task.result()
+            total_number_of_particles_projected += num_particles_projected
+            total_number_of_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
             # Check if cropping is enabled and perform cropping
             if args.crop_particles:
@@ -2021,7 +2028,8 @@ def main():
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.structures)
     print_and_log("\n---------------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Total time taken to generate {num_micrographs} synthetic micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} with a total of {total_number_of_particles} particles: {time_str}", logging.WARNING)
+    print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} with the particle counts below: {time_str}", logging.WARNING)
+    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}", logging.WARNING)
     print_and_log("---------------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
     print_and_log("One .star file per structure can be found in the run directories.\n", logging.WARNING)
