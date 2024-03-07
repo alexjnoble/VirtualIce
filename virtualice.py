@@ -93,7 +93,7 @@ def parse_arguments():
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
-    particle_micrograph_group.add_argument("-t", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
+    particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
     particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson and Gaussian noise. Default is %(default)s")
     particle_micrograph_group.add_argument("-S", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 3 distributions: Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
@@ -105,6 +105,7 @@ def parse_arguments():
     simulation_group = parser.add_argument_group('Simulation Options')
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=90, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
+    simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness")
     simulation_group.add_argument("-o", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
     simulation_group.add_argument("-E", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
     simulation_group.add_argument("--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
@@ -1851,9 +1852,12 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         # Random ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there is a fudge factor of 5 just so the user gets a number that feels right)
-        min_ice_thickness = fudge_factor/args.max_ice_thickness
-        max_ice_thickness = fudge_factor/args.min_ice_thickness
-        rand_ice_thickness = random.uniform(min_ice_thickness, max_ice_thickness)
+        if args.ice_thickness is None:
+            min_ice_thickness = fudge_factor/args.max_ice_thickness
+            max_ice_thickness = fudge_factor/args.min_ice_thickness
+            ice_thickness = random.uniform(min_ice_thickness, max_ice_thickness)
+        else:
+            ice_thickness = fudge_factor / args.ice_thickness
 
         fname = os.path.splitext(os.path.basename(fname))[0]
 
@@ -1927,8 +1931,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/rand_ice_thickness:.1f}...", logging.INFO)
-        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, rand_ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
+        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/ice_thickness:.1f}...", logging.INFO)
+        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
         print_and_log("Done!", logging.INFO)
         total_num_particles_projected += num_particles_projected
         total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
@@ -2036,7 +2040,7 @@ def main():
 
     if args.imod_coordinate_file:
         print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
-        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files.)\n", logging.WARNING)
+        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)\n", logging.WARNING)
 
     if args.coord_coordinate_file:
         print_and_log("One (x y) .coord file per micrograph can be found in the run directories.\n", logging.WARNING)
