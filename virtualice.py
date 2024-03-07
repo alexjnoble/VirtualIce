@@ -94,7 +94,7 @@ def parse_arguments():
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
     particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
-    particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson and Gaussian noise. Default is %(default)s")
+    particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
     particle_micrograph_group.add_argument("-S", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 3 distributions: Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=0, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
@@ -1456,18 +1456,17 @@ def estimate_noise_parameters(mrc_path):
 
 def process_slice(args):
     """
-    Process a slice of the particle stack by adding Poisson and Gaussian electronic noise.
+    Process a slice of the particle stack by adding Poisson noise.
 
     :param args: A tuple containing the following parameters:
                  - slice numpy_array: A 3D numpy array representing a slice of the particle stack.
                  - num_frames int: Number of frames to simulate for each particle image.
                  - scaling_factor float: Factor by which to scale the particle images before adding noise.
-                 - electronic_noise_std float: Standard deviation of the Gaussian electronic noise.
     :return numpy_array: A 3D numpy array representing the processed slice of the particle stack with added noise.
     """
     print_and_log("", logging.DEBUG)
     # Unpack the arguments
-    slice, num_frames, scaling_factor, gaussian_variance = args
+    slice, num_frames, scaling_factor = args
 
     # Create an empty array to store the noisy slice of the particle stack
     noisy_slice = np.zeros_like(slice, dtype=np.float32)
@@ -1488,33 +1487,24 @@ def process_slice(args):
             # Add Poisson noise to the non-zero values in the particle, modulated by the original pixel values; it represents shot noise.
             noisy_frame[mask] = np.random.poisson(particle[mask])
 
-            # Generate Gaussian electronic noise and restrict it to the mask. This noise is not modulated by the original pixel values; it represents uniform camera readout noise.
-            electronic_noise = np.round(np.random.normal(loc=0, scale=gaussian_variance, size=particle.shape)).astype(np.int32)
-            electronic_noise *= mask.astype(np.int32)
-
-            # Add the electronic noise to the noisy frame
-            noisy_frame += electronic_noise
-
             # Accumulate the noisy frame to the noisy slice
             noisy_slice[i, :, :] += noisy_frame
 
     return noisy_slice
 
-def add_combined_noise(particle_stack, num_frames, num_cores, avg_gaussian_variance=1.0, scaling_factor=1.0):
+def add_poisson_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0):
     """
-    Add Poisson and Gaussian electronic noise to a stack of particle images.
+    Add Poisson noise to a stack of particle images.
 
     This function simulates the acquisition of `num_frames` frames for each particle image
-    in the input stack, adds Poisson noise and Gaussian electronic noise to each frame,
-    and then sums up the frames to obtain the final noisy particle image. The function
-    applies both noises only to the non-zero values in each particle image, preserving
-    the background.
+    in the input stack, adds Poisson noise to each frame, and then sums up the frames to
+    obtain the final noisy particle image. The function applies both noises only to the
+    non-zero values in each particle image, preserving the background.
 
     :param numpy_array particle_stack: 3D numpy array representing a stack of 2D particle images.
     :param int num_frames: Number of frames to simulate for each particle image.
     :param int num_cores: Number of CPU cores to parallelize slices across.
     :param float scaling_factor: Factor by which to scale the particle images before adding noise.
-    :param float avg_gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
     :return numpy_array: 3D numpy array representing the stack of noisy particle images.
     """
     print_and_log("", logging.DEBUG)
@@ -1522,7 +1512,7 @@ def add_combined_noise(particle_stack, num_frames, num_cores, avg_gaussian_varia
     slices = np.array_split(particle_stack, num_cores)
 
     # Prepare the arguments for each slice
-    args = [(s, num_frames, scaling_factor, avg_gaussian_variance) for s in slices]
+    args = [(s, num_frames, scaling_factor) for s in slices]
 
     # Create a pool of worker processes
     with Pool(num_cores) as pool:
@@ -1534,14 +1524,16 @@ def add_combined_noise(particle_stack, num_frames, num_cores, avg_gaussian_varia
 
     return noisy_particle_stack
 
-def create_collage(large_image, small_images, particle_locations):
+def create_collage(large_image, small_images, particle_locations, gaussian_variance):
     """
     Create a collage of small images on a blank canvas of the same size as the large image.
+    Add Gaussian noise based on the micrograph that the particle collage will be projected onto.
     Particles that would extend past the edge of the large image are trimmed before being added.
 
     :param numpy_array large_image: Shape of the large image.
     :param numpy_array small_images: List of small images to place on the canvas.
     :param list_of_tuples particle_locations: Coordinates where each small image should be placed.
+    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
     :return numpy_array: Collage of small images.
     """
     print_and_log("", logging.DEBUG)
@@ -1567,12 +1559,21 @@ def create_collage(large_image, small_images, particle_locations):
         x_end = min(large_image.shape[1], x_end)
         y_end = min(large_image.shape[0], y_end)
 
+        # Before adding, ensure the sizes match by explicitly setting the shape dimensions
+        trim_height, trim_width = y_end_trim - y_start_trim, x_end_trim - x_start_trim
+        y_end = y_start + trim_height
+        x_end = x_start + trim_width
+
         # Add the trimmed small image to the collage
         collage[y_start:y_end, x_start:x_end] += small_image[y_start_trim:y_end_trim, x_start_trim:x_end_trim]
 
+    # Apply Gaussian noise across the entire collage to simulate the camera noise
+    gaussian_noise = np.random.normal(loc=0, scale=np.sqrt(gaussian_variance), size=collage.shape)
+    collage += gaussian_noise
+
     return collage
 
-def blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance):
+def blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -1595,6 +1596,7 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
     :param int polygon_expansion_distance: Distance by which to expand the polygons.
+    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
     :return numpy_array: The blended large image.
     """
     print_and_log("", logging.DEBUG)
@@ -1646,7 +1648,7 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
     # Normalize the input micrograph to itself
     large_image[:, :] = (large_image[:, :] - large_image[:, :].mean())/large_image[:, :].std()
 
-    collage = create_collage(large_image, small_images, particle_locations)
+    collage = create_collage(large_image, small_images, particle_locations, gaussian_variance)
     collage *= scale  # Apply scaling if necessary
 
     blended_image = large_image + collage  # Blend the collage with the large image
@@ -1658,7 +1660,7 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
 
     return blended_image, filtered_particle_locations
 
-def add_images(large_image_path, small_images, scale_percent, structure_name, border_distance, edge_particles, save_edge_coordinates, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
+def add_images(large_image_path, small_images, scale_percent, structure_name, border_distance, edge_particles, save_edge_coordinates, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
@@ -1669,7 +1671,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     :param int border_distance: The minimum distance between particles and the image border.
     :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
     :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
-    :param float scale: The scale factor to adjust the intensity of the particles.
+    :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
     :param str output_path: The file path to save the resulting micrograph.
     :param str dist_type: The type of distribution (random or non-random) for placing particles in micrographs.
     :param str non_random_dist_type: The type of non-random distribution (circular, inverse circular, gaussian) for placing particles in micrographs.
@@ -1680,6 +1682,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
     :param float polygon_expansion_distance: Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates.
+    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
     :param bool save_as_mrc: Boolean to save the resulting synthetic micrograph and an MRC file.
     :param bool save_as_png: Boolean to save the resulting synthetic micrograph and an PNG file.
     :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
@@ -1699,10 +1702,10 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image, filtered_particle_locations = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image, filtered_particle_locations = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance)
     else:
         print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
-        result_image, filtered_particle_locations = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance)
+        result_image, filtered_particle_locations = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
@@ -1850,7 +1853,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
         print_and_log(f"-------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
 
-        # Random ice thickness
+        # Random or user-specified ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there is a fudge factor of 5 just so the user gets a number that feels right)
         if args.ice_thickness is None:
             min_ice_thickness = fudge_factor/args.max_ice_thickness
@@ -1878,7 +1881,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.3, 0.7])
         if dist_type == 'non-random':
             # Randomly select a non-random distribution, weighted towards inverse circular and gaussian because they are more common. Note: gaussian can create 1-5 gaussian blobs on the micrograph
-            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0.14, 0.5, 0.36])
+            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0.1, 0.6, 0.3])
             if not args.num_particles:
                 if non_random_dist_type == 'circular':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
@@ -1917,10 +1920,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
         print_and_log(output, logging.INFO)
-        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution and adding Gaussian (white) noise...", logging.INFO)
+        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
-        noisy_particles = add_combined_noise(particles, args.num_simulated_particle_frames, args.cpus, gaussian_variance)
+        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
         print_and_log("Done!\n", logging.INFO)
 
@@ -1931,8 +1934,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while simulating a relative ice thickness of {5/ice_thickness:.1f}...", logging.INFO)
-        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
+        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {5/ice_thickness:.1f}...", logging.INFO)
+        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, gaussian_variance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
         print_and_log("Done!", logging.INFO)
         total_num_particles_projected += num_particles_projected
         total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
