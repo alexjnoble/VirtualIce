@@ -51,11 +51,11 @@ import itertools
 import subprocess
 import numpy as np
 import pandas as pd
+import SimpleITK as sitk
 from matplotlib.path import Path
 from multiprocessing import Pool
 from urllib import request, error
 from datetime import datetime, timedelta
-from scipy.ndimage import gaussian_filter
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
@@ -90,13 +90,13 @@ def parse_arguments():
     # Particle and Micrograph Generation Options
     particle_micrograph_group = parser.add_argument_group('Particle and Micrograph Generation Options')
     particle_micrograph_group.add_argument("-n", "--num_images", type=int, default=5, help="Number of micrographs to create for each structure requested. Default is %(default)s")
-    particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
+    particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
     particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
     particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
-    particle_micrograph_group.add_argument("-S", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
-    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 3 distributions: Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
+    particle_micrograph_group.add_argument("-G", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
+    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 4 distributions: Mimicking the micrograph ice thickness (darker areas = more particles), Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=0, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("--edge_particles", action="store_true", help="Allow particles to be placed up to the edge of the micrograph.")
     particle_micrograph_group.add_argument("--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than half a particle box size from the edge, requires --edge_particles to be True or border to be less than half the particle box size.")
@@ -106,7 +106,7 @@ def parse_arguments():
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=90, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness")
-    simulation_group.add_argument("-o", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
+    simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
     simulation_group.add_argument("-E", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
     simulation_group.add_argument("--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
     simulation_group.add_argument("-A", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
@@ -118,7 +118,7 @@ def parse_arguments():
     # Junk Labels Options
     junk_labels_group = parser.add_argument_group('Junk Labels Options')
     junk_labels_group.add_argument("--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Don't remove particles from coordinate files that are on/near junk or substrate.")
-    junk_labels_group.add_argument("-j", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the json file. Default is %(default)s")
+    junk_labels_group.add_argument("-S", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the json file. Default is %(default)s")
     junk_labels_group.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
     junk_labels_group.add_argument("-y", "--flip_y", action="store_true", help="Flip the polygons that identify junk along the y-axis")
     junk_labels_group.add_argument("-e", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the json file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
@@ -130,6 +130,7 @@ def parse_arguments():
 
     # Micrograph Output Options
     output_group = parser.add_argument_group('Micrograph Output Options')
+    output_group.add_argument("-o", "--output_directory", type=str, help="Directory to save all output files. If not specified, a unique directory will be created.")
     output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
     output_group.add_argument("--no-mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
     output_group.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
@@ -143,7 +144,7 @@ def parse_arguments():
     # System and Program Options
     misc_group = parser.add_argument_group('System and Program Options')
     misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps. Default is the number of CPU cores available: %(default)s")
-    misc_group.add_argument("-p", "--parallel_processes", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
+    misc_group.add_argument("-j", "--parallel_processes", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
     misc_group.add_argument("-V", "--verbosity", type=int, default=1, help="Set verbosity level: 0 (quiet), 1 (some output), 2 (verbose), 3 (debug). For 0-2, a log file will be additionally written with 2. For 3, a log file will be additionally written with 3. Default is %(default)s")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
@@ -163,6 +164,16 @@ def parse_arguments():
     if not (args.mrc or args.png or args.jpeg):
         parser.error("No format specified for saving images. Please specify at least one format.")
 
+    # Determine output directory
+    if not args.output_directory:
+        # Create a unique directory name using the current date and time
+        current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        args.output_directory = f"VirtualIce_run_{current_time}"
+
+    # Create the output directory if it doesn't exist
+    #if not os.path.exists(args.output_directory):
+    #    os.makedirs(args.output_directory)
+
     # Print all arguments for the user's information
     formatted_output = ""
     for arg, value in vars(args).items():
@@ -179,17 +190,23 @@ def parse_arguments():
 
 def check_num_particles(value):
     """
-    Check if the number of particles is within the allowed range.
-    This function exists just so that ./virtualice.py -h doesn't blow up.
+    Check if the number of particles is within the allowed range or 'max'.
 
-    :param int value: Number of particles.
-    :return int: Value if it is valid.
-    :raises ArgumentTypeError: If the value is not in the allowed range.
+    :param int/str value: Number of particles as an integer or 'max' as a string.
+    :return int/str: Value if it is valid or 'max'.
+    :raises ArgumentTypeError: If the value is not in the allowed range and not 'max'.
     """
-    ivalue = int(value)
-    if ivalue < 2 or ivalue >= 1000000:
-        raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000")
-    return ivalue
+    # Allow 'max' (case insensitive) to specify the maximum number of particles
+    if str(value).lower() == 'max':
+        return 'max'
+
+    try:
+        ivalue = int(value)
+        if ivalue < 2 or ivalue >= 1000000:
+            raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000")
+        return ivalue
+    except ValueError:
+        raise argparse.ArgumentTypeError("Number of particles must be an integer between 2 and 1000000 or 'max'")
 
 def check_binning(value):
     """
@@ -1302,10 +1319,11 @@ def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons
 
     return filtered_particle_locations
 
-def generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type):
+def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type):
     """
     Generate random/non-random locations for particles within an image.
 
+    :param numpy_array micrograph_image: The micrograph image (used only in the 'micrograph' distribution option.
     :param tuple image_size: The size of the image as a tuple (width, height).
     :param int num_small_images: The number of small images or particles to generate coordinates for.
     :param int half_small_image_width: Half the width of a small image.
@@ -1431,6 +1449,32 @@ def generate_particle_locations(image_size, num_small_images, half_small_image_w
                     attempts = 0  # Reset attempts counter after successful addition
                 else:
                     attempts += 1  # Increment attempts counter if addition is unsuccessful
+
+        elif non_random_dist_type == 'micrograph':
+            # Apply a Gaussian filter to the micrograph to obtain large-scale features
+            sigma = min(width, height) / 1  # Keep only low-resolution features. Something needs to be in the denominator otherwise the smoothing function breaks
+            itk_image = sitk.GetImageFromArray(micrograph_image)
+            filtered_micrograph_itk = sitk.SmoothingRecursiveGaussian(itk_image, sigma=sigma)
+            filtered_micrograph = sitk.GetArrayFromImage(filtered_micrograph_itk)
+
+            # Invert the filtered image to assign higher probability to lower pixel values
+            inverted_micrograph = np.max(filtered_micrograph) - filtered_micrograph
+
+            # Normalize the inverted image to get probabilities
+            prob_map = inverted_micrograph / inverted_micrograph.sum()
+
+            # Flatten the probability map and generate indices
+            flat_prob_map = prob_map.ravel()
+            idx = np.arange(width * height)
+
+            # Choose locations based on the probability map
+            chosen_indices = np.random.choice(idx, size=num_small_images, replace=False, p=flat_prob_map)
+            y_coords, x_coords = np.unravel_index(chosen_indices, (height, width))
+
+            # Ensure particles are placed within borders
+            for x, y in zip(x_coords, y_coords):
+                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance:
+                    particle_locations.append((x, y))
 
     return particle_locations
 
@@ -1698,7 +1742,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     half_small_image_width = int(small_images.shape[1]/2)
 
     # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
-    particle_locations = generate_particle_locations(image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
+    particle_locations = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
@@ -1868,20 +1912,25 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         # 1. If the user provides a value for `args.num_particles` and it is less than or equal to the `max_num_particles`, use it.
         # 2. If the user does not provide a value, use `rand_num_particles`.
         # 3. If the user's provided value exceeds `max_num_particles`, use `max_num_particles` instead.
+        # 4. If the user specifies 'max', use max_num_particles, otherwise apply the existing conditions
         print_and_log(f"Trimming the mrc...", logging.INFO)
         rand_num_particles, max_num_particles = trim_vol_return_rand_particle_number(f"{structure_name}.mrc", f"{args.image_directory}/{fname}.mrc", args.scale_percent, f"{structure_name}.mrc")
-        num_particles = args.num_particles if args.num_particles and args.num_particles <= max_num_particles else (rand_num_particles if not args.num_particles else max_num_particles)
+        num_particles = (max_num_particles if str(args.num_particles).lower() == 'max' else
+                 args.num_particles if args.num_particles and isinstance(args.num_particles, int) and args.num_particles <= max_num_particles else
+                 rand_num_particles if not args.num_particles else
+                 max_num_particles)
+
 
         if args.num_particles:
             print_and_log(f"Attempting to add {int(num_particles)} particles to the micrograph...", logging.INFO)
         else:
             print_and_log("Choosing a random number of particles to attempt to add to the micrograph...", logging.INFO)
 
-        # Set the particle distribution type. If none is given (default), then 30% of the time it will choose random and 70% non-random
-        dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.3, 0.7])
+        # Set the particle distribution type. If none is given (default), then 10% of the time it will choose random and 90% non-random
+        dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.1, 0.9])
         if dist_type == 'non-random':
-            # Randomly select a non-random distribution, weighted towards inverse circular and gaussian because they are more common. Note: gaussian can create 1-5 gaussian blobs on the micrograph
-            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian'], p=[0.1, 0.6, 0.3])
+            # Randomly select a non-random distribution, weighted towards micrograph because it is the most realistic. Note: gaussian can create 1-5 gaussian blobs on the micrograph
+            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian', 'micrograph'], p=[0.0025, 0.0075, 0.19, 0.8])
             if not args.num_particles:
                 if non_random_dist_type == 'circular':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
@@ -1920,7 +1969,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
         print_and_log(output, logging.INFO)
-        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle from a Poisson distribution...", logging.INFO)
+        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle projection from a Poisson distribution...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
         noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus)
@@ -1982,6 +2031,14 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     with open("structure_mass_numimages_numparticlesprojected_numparticlessaved.txt", "a") as f:
         f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
 
+    with open("info.txt", "a") as f:
+        # Check if the file is empty
+        if f.tell() == 0:  # Only write the first line if the file is new
+            f.write("structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
+
+        # Write the subsequent lines
+        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
+    
     box_size = get_mrc_box_size(f"{structure_name}.mrc")
 
     # Cleanup
@@ -2002,6 +2059,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 def main():
     start_time = time.time()
 
+    # Parse user arguments, check them, and update them conditionally if necessary
     args = parse_arguments()
 
     # Loop over each provided structure and generate micrographs. Skip a structure if it doesn't download/exist
