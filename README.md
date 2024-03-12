@@ -6,7 +6,7 @@ VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buf
 
 - Generates synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
 - Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate.
-- Adds Poisson and Gaussian noise to particles.``
+- Adds Poisson and Gaussian noise to particles.
 - Applies Contrast Transfer Function (CTF) to simulate microscope optics.
 - Outputs micrographs as MRC, PNG, and JPEG output formats.
 - Multi-core processing.
