@@ -9,7 +9,7 @@
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
 # Dependencies: EMAN2 installation (specifically e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
-#               pip install mrcfile numpy scipy matplotlib cv2
+#               pip install mrcfile numpy scipy matplotlib cv2 SimpleITK
 #
 # This program depends on EMAN2 to function properly. Users must separately
 # install EMAN2 to use this program.
@@ -74,7 +74,7 @@ def parse_arguments():
       1. Basic usage: virtualice.py -s 1TIM -n 10
          Generates 10 random micrographs of PDB 1TIM.
 
-      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -d n -p 2 -C
+      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -j 2 -C
          Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
          Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
          Uses a non-random distribution of particles, parallelizes micrograph generation across 2 CPUs, and crops particles
@@ -84,7 +84,7 @@ def parse_arguments():
     # Input Options
     input_group = parser.add_argument_group('Input Options')
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Default is %(default)s.")
-    input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
+    input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
 
     # Particle and Micrograph Generation Options
@@ -96,10 +96,10 @@ def parse_arguments():
     particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
     particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
     particle_micrograph_group.add_argument("-G", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
-    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform distribution. Non-random selects from 4 distributions: Mimicking the micrograph ice thickness (darker areas = more particles), Gaussian clumps, circular, and inverse circular. Default is %(default)s which randomly selects a distribution per micrograph.")
-    particle_micrograph_group.add_argument("-B", "--border", type=int, default=0, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
+    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform 2D distribution. Non-random selects from 4 distributions: 1) Mimicking the micrograph ice thickness (darker areas = more particles), 2) Gaussian clumps, 3) circular, and 4) inverse circular. Default is %(default)s which selects a distribution per micrograph based on internal weights.")
+    particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("--edge_particles", action="store_true", help="Allow particles to be placed up to the edge of the micrograph.")
-    particle_micrograph_group.add_argument("--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than half a particle box size from the edge, requires --edge_particles to be True or border to be less than half the particle box size.")
+    particle_micrograph_group.add_argument("--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than half a particle box size from the edge, requires --edge_particles to be True or --border to be less than half the particle box size.")
 
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
@@ -113,26 +113,26 @@ def parse_arguments():
     simulation_group.add_argument("-F", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
     simulation_group.add_argument("--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
     simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
-    simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
+    simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
     # Junk Labels Options
     junk_labels_group = parser.add_argument_group('Junk Labels Options')
-    junk_labels_group.add_argument("--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Don't remove particles from coordinate files that are on/near junk or substrate.")
-    junk_labels_group.add_argument("-S", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the json file. Default is %(default)s")
+    junk_labels_group.add_argument("--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Do not remove particles from coordinate files that are on/near junk or substrate.")
+    junk_labels_group.add_argument("-S", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the JSON files with AnyLabeling. Default is %(default)s")
     junk_labels_group.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
     junk_labels_group.add_argument("-y", "--flip_y", action="store_true", help="Flip the polygons that identify junk along the y-axis")
-    junk_labels_group.add_argument("-e", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the json file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
+    junk_labels_group.add_argument("-e", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the JSON file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the JSON file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
 
     # Particle Cropping Options
     particle_cropping_group = parser.add_argument_group('Particle Cropping Options')
-    particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Default is no cropping.")
-    particle_cropping_group.add_argument("--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
+    particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Particles will be extracted to the [structure_name]/Particles/ directory as .mrc files. Default is no cropping.")
+    particle_cropping_group.add_argument("-X", "--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
 
     # Micrograph Output Options
     output_group = parser.add_argument_group('Micrograph Output Options')
     output_group.add_argument("-o", "--output_directory", type=str, help="Directory to save all output files. If not specified, a unique directory will be created.")
     output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
-    output_group.add_argument("--no-mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
+    output_group.add_argument("--no_mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
     output_group.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
     output_group.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
     output_group.add_argument("-Q", "--jpeg-quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
@@ -1337,7 +1337,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     width, height = image_size
 
     # If edge_particles is set to True, allow particles to go all the way to the edge of the micrograph
-    border_distance = 0 if edge_particles else max(border_distance, half_small_image_width)
+    border_distance = -1 if edge_particles else max(border_distance, half_small_image_width)
 
     particle_locations = []
 
@@ -2028,9 +2028,6 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         shutil.move(f"{structure_name}.star", f"{structure_name}/")
 
     # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
-    with open("structure_mass_numimages_numparticlesprojected_numparticlessaved.txt", "a") as f:
-        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
-
     with open("info.txt", "a") as f:
         # Check if the file is empty
         if f.tell() == 0:  # Only write the first line if the file is new
@@ -2087,6 +2084,7 @@ def main():
 
             # Check if cropping is enabled and perform cropping
             if args.crop_particles:
+                box_size = args.box_size if args.box_size is not None else box_size
                 crop_particles_from_micrographs(structure_name, box_size, args.cpus)
 
     end_time = time.time()
