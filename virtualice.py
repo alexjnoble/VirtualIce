@@ -1777,6 +1777,8 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     :param str particles_dir: Directory to save cropped particles.
     :param int box_size: The box size in pixels for the cropped particles.
     """
+    print_and_log("", logging.DEBUG)
+    cropped_count = 0
     with mrcfile.open(micrograph_path, permissive=True) as mrc:
         for _, row in particle_rows.iterrows():
             x, y = int(row['coord_x']), int(row['coord_y'])
@@ -1788,6 +1790,9 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
             cropped_particle = mrc.data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
             particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
             writemrc(particle_path, cropped_particle.astype(np.float32))
+            cropped_count += 1
+
+    return cropped_count
 
 def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     """
@@ -1806,6 +1811,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     - This function assumes the presence of a STAR file in the structure directory with the naming
       convention '{structure_name}.star' containing the necessary coordinates for cropping.
     """
+    print_and_log("", logging.DEBUG)
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
@@ -1814,6 +1820,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     df['particle_counter'] = range(1, len(df) + 1)
     
     grouped_df = df.groupby('micrograph_name')
+    total_cropped = 0
 
     # Use the user-defined number of CPUs for parallel processing
     with ProcessPoolExecutor(max_workers=num_cpus) as executor:
@@ -1830,7 +1837,9 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
         
         # Optional: Wait for all futures to complete if you need to process results further
         for future in futures:
-            future.result()
+            total_cropped += future.result()
+
+    return total_cropped
 
 def generate_micrographs(args, structure_name, structure_type, structure_index, total_structures):
     """
@@ -2062,6 +2071,7 @@ def main():
     total_structures = len(args.structures)
     total_number_of_particles_projected = 0
     total_number_of_particles_with_saved_coordinates = 0
+    total_cropped_particles = 0
     with ProcessPoolExecutor(max_workers=args.parallel_processes) as executor:
         # Prepare a list of tasks
         tasks = []
@@ -2084,14 +2094,14 @@ def main():
             # Check if cropping is enabled and perform cropping
             if args.crop_particles:
                 box_size = args.box_size if args.box_size is not None else box_size
-                crop_particles_from_micrographs(structure_name, box_size, args.cpus)
+                total_cropped_particles = crop_particles_from_micrographs(structure_name, box_size, args.cpus)
 
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.structures)
     print_and_log("\n---------------------------------------------------------------------------------------------------------------------", logging.WARNING)
     print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} with the particle counts below: {time_str}", logging.WARNING)
-    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}", logging.WARNING)
+    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if args.crop_particles else ""), logging.WARNING)
     print_and_log("---------------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
     print_and_log("One .star file per structure can be found in the run directories.\n", logging.WARNING)
