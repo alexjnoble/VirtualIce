@@ -17,7 +17,7 @@ VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buf
 VirtualIce requires Python 3, EMAN2, IMOD, and several dependencies, which can be installed using pip:
 
 ```bash
-pip install numpy scipy matplotlib opencv-python-headless mrcfile
+pip install numpy scipy matplotlib opencv-python-headless mrcfile cv2 SimpleITK
 ```
 
 ## Usage
