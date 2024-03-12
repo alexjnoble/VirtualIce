@@ -55,14 +55,13 @@ import SimpleITK as sitk
 from matplotlib.path import Path
 from multiprocessing import Pool
 from urllib import request, error
-from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
 # Global variable to store verbosity level
 global_verbosity = 0
 
-def parse_arguments():
+def parse_arguments(script_start_time):
     """
     Parses command-line arguments.
 
@@ -155,7 +154,7 @@ def parse_arguments():
     args.verbosity = 0 if args.quiet else args.verbosity
 
     # Setup logging based on the verbosity level
-    setup_logging(args.verbosity)
+    setup_logging(script_start_time, args.verbosity)
 
     if args.crop_particles and not args.mrc:
         args.mrc = True
@@ -166,9 +165,8 @@ def parse_arguments():
 
     # Determine output directory
     if not args.output_directory:
-        # Create a unique directory name using the current date and time
-        current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        args.output_directory = f"VirtualIce_run_{current_time}"
+        # Create a unique directory name using the date and time that the script was run
+        args.output_directory = f"VirtualIce_run_{script_start_time}"
 
     # Create the output directory if it doesn't exist
     #if not os.path.exists(args.output_directory):
@@ -222,7 +220,7 @@ def check_binning(value):
         raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
     return ivalue
 
-def setup_logging(verbosity):
+def setup_logging(script_start_time, verbosity):
     """
     Sets up logging configuration for both console and file output based on the specified verbosity level.
 
@@ -242,8 +240,7 @@ def setup_logging(verbosity):
     levels = {0: logging.ERROR, 1: logging.WARNING, 2: logging.INFO, 3: logging.DEBUG}
     logging_level = levels.get(verbosity, logging.INFO)
 
-    datetime_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    log_filename = f"virtualice_{datetime_str}.log"
+    log_filename = f"virtualice_{script_start_time}.log"
 
     simple_formatter = logging.Formatter('%(message)s')
     detailed_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d, %(funcName)s)')
@@ -307,21 +304,22 @@ def time_diff(time_diff):
     :return str: A formatted string indicating the time difference.
     """
     print_and_log("", logging.DEBUG)
-    # Convert the time difference to a timedelta object
-    delta = timedelta(seconds=time_diff)
-    # Format the timedelta object based on its components
-    if delta.days > 0:
-        # If the time difference is more than a day, display days, hours, minutes, and seconds
-        time_str = str(delta)
-    elif delta.seconds >= 3600:
-        # If the time difference is less than a day, display hours, minutes, and seconds
-        hours, remainder = divmod(delta.seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        time_str = f"{hours} hours, {minutes} minutes, {seconds} seconds"
-    else:
-        # If the time difference is less than an hour, display minutes and seconds
-        minutes, seconds = divmod(delta.seconds, 60)
-        time_str = f"{minutes} minutes, {seconds} seconds"
+    seconds_in_day = 86400
+    seconds_in_hour = 3600
+    seconds_in_minute = 60
+
+    days, time_diff = divmod(time_diff, seconds_in_day)
+    hours, time_diff = divmod(time_diff, seconds_in_hour)
+    minutes, seconds = divmod(time_diff, seconds_in_minute)
+
+    time_str = ""
+    if days > 0:
+        time_str += f"{int(days)} day{'s' if days != 1 else ''}, "
+    if hours > 0 or days > 0:  # Show hours if there are any days
+        time_str += f"{int(hours)} hour{'s' if hours != 1 else ''}, "
+    if minutes > 0 or hours > 0 or days > 0:  # Show minutes if there are any hours or days
+        time_str += f"{int(minutes)} minute{'s' if minutes != 1 else ''}, "
+    time_str += f"{int(seconds)} second{'s' if seconds != 1 else ''}"
 
     return time_str
 
@@ -2055,9 +2053,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
 def main():
     start_time = time.time()
+    start_time_formatted = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(start_time))
 
     # Parse user arguments, check them, and update them conditionally if necessary
-    args = parse_arguments()
+    args = parse_arguments(start_time_formatted)
 
     # Loop over each provided structure and generate micrographs. Skip a structure if it doesn't download/exist
     total_structures = len(args.structures)
