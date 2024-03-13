@@ -9,7 +9,7 @@
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
 # Dependencies: EMAN2 installation (specifically e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
-#               pip install mrcfile numpy scipy matplotlib cv2 SimpleITK
+#               pip install mrcfile numpy scipy cv2 SimpleITK
 #
 # This program depends on EMAN2 to function properly. Users must separately
 # install EMAN2 to use this program.
@@ -46,7 +46,6 @@ import subprocess
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
-from matplotlib.path import Path
 from multiprocessing import Pool
 from urllib import request, error
 from concurrent.futures import ProcessPoolExecutor
@@ -1219,6 +1218,7 @@ def downsample_coordinate_files(structure_name, binning, imod_coordinate_file, c
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
     """
+    print_and_log("", logging.DEBUG)
     downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{binning}.star", binning)
     if imod_coordinate_file:
         for filename in os.listdir(f"{structure_name}/"):
@@ -1323,38 +1323,39 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
 
 def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons):
     """
-    Filters out particle locations that are inside any polygon.
+    Filters out particle locations that are inside any polygon using OpenCV.
 
     :param list_of_tuples particle_locations: List of (x, y) coordinates of particle locations.
     :param int json_scale: Binning factor used when labeling junk to create the json file.
     :param list_of_tuples polygons: List of polygons where each polygon is a list of (x, y) coordinates.
-    :return list_of_tuples : List of (x, y) coordinates of particle locations that are outside the polygons.
+    :return list_of_tuples: List of (x, y) coordinates of particle locations that are outside the polygons.
     """
     print_and_log("", logging.DEBUG)
     # An empty list to store particle locations that are outside the polygons
     filtered_particle_locations = []
 
-    # Scale particle locations us to the proper image size
-    particle_locations = [(float(x)/json_scale, float(y)/json_scale) for x, y in particle_locations]
+    # Scale particle locations up to the proper image size
+    scaled_particle_locations = [(int(x / json_scale), int(y / json_scale)) for x, y in particle_locations]
 
     # Iterate over each particle location
-    for x, y in particle_locations:
+    for point in scaled_particle_locations:
+        # Convert point to a numpy array
+        point_array = np.array([point], dtype=np.int32)
+
         # Variable to keep track if a point is inside any polygon
         inside_any_polygon = False
 
         # Check each polygon to see if the point is inside
         for polygon in polygons:
-            path = Path(polygon)
-            if path.contains_point((x, y)):
+            poly_np = np.array(polygon, dtype=np.int32)
+            if cv2.pointPolygonTest(poly_np, point, False) >= 0:
                 inside_any_polygon = True
                 break  # Exit the loop if point is inside any polygon
 
         # If the point is not inside any polygon, add it to the filtered list
         if not inside_any_polygon:
-            filtered_particle_locations.append((x, y))
-
-    # Scale filtered particle locations back up
-    filtered_particle_locations = [(float(x) * json_scale, float(y) * json_scale) for x, y in filtered_particle_locations]
+            # Scale the point back to original scale
+            filtered_particle_locations.append((point[0] * json_scale, point[1] * json_scale))
 
     return filtered_particle_locations
 
