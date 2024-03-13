@@ -13,22 +13,16 @@
 #
 # This program depends on EMAN2 to function properly. Users must separately
 # install EMAN2 to use this program.
-
-# If the user wishes to output IMOD coordinate files, then IMOD needs to be
-# installed separately.
 #
-# EMAN2 is distributed under a dual license - BSD-3-Clause and GPL-2.0.
-# For the details of EMAN2's licensing, please refer to:
+# EMAN2 is distributed under BSD-3-Clause and GPL-2.0 licenses. For details, see:
 # - BSD-3-Clause: https://opensource.org/licenses/BSD-3-Clause
 # - GPL-2.0: https://opensource.org/licenses/GPL-2.0
 #
-# You can obtain the EMAN2 source code from its official GitHub repository:
-# https://github.com/cryoem/eman2
+# EMAN2 source code: https://github.com/cryoem/eman2
 #
-# IMOD is distributed under GPL-2.0. For details, see the link above.
+# IMOD (separate install; GPL-2.0 license) is optional to output IMOD coordinate files.
 #
-# You can obtain the IMOD source code and packages from its official website:
-# https://bio3d.colorado.edu/imod/
+# IMOD source code and packages: https://bio3d.colorado.edu/imod/
 #
 # Ensure compliance with EMAN2's and IMOD's license terms when obtaining and using them.
 __version__ = "1.0.0"
@@ -61,6 +55,66 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 # Global variable to store verbosity level
 global_verbosity = 0
 
+def check_num_particles(value):
+    """
+    Check if the number of particles is within the allowed range or 'max'.
+
+    :param int/str value: Number of particles as an integer or 'max' as a string.
+    :return int/str: Value if it is valid or 'max'.
+    :raises ArgumentTypeError: If the value is not in the allowed range and not 'max'.
+    """
+    # Allow 'max' (case insensitive) to specify the maximum number of particles
+    if str(value).lower() == 'max':
+        return 'max'
+
+    try:
+        ivalue = int(value)
+        if ivalue < 2 or ivalue >= 1000000:
+            raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000")
+        return ivalue
+    except ValueError:
+        raise argparse.ArgumentTypeError("Number of particles must be an integer between 2 and 1000000 or 'max'")
+
+def check_binning(value):
+    """
+    Check if the binning is within the allowed range.
+    This function exists just so that ./virtualice.py -h doesn't blow up.
+
+    :param int value: Binning requested.
+    :return int: Value if it is valid.
+    :raises ArgumentTypeError: If the value is not in the allowed range.
+    """
+    ivalue = int(value)
+    if ivalue < 2 or ivalue >= 64:
+        raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
+    return ivalue
+
+def validate_positive_int(parser, arg_name, value):
+    """
+    Validates if a given value is a positive integer.
+
+    :param str arg_name: The name of the argument being validated.
+    :param int value: The value to be validated.
+
+    :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
+    """
+    print_and_log("", logging.DEBUG)
+    if value is not None and value <= 0:
+        parser.error(f"{arg_name} must be a positive integer.")
+
+def validate_positive_float(parser, arg_name, value):
+    """
+    Validates if a given value is a positive float.
+
+    :param str arg_name: The name of the argument being validated.
+    :param int value: The value to be validated.
+
+    :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
+    """
+    print_and_log("", logging.DEBUG)
+    if value is not None and value <= 0:
+        parser.error(f"{arg_name} must be a positive float.")
+
 def parse_arguments(script_start_time):
     """
     Parses command-line arguments.
@@ -92,7 +146,7 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
-    particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. Default is %(default)s")
+    particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
     particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
     particle_micrograph_group.add_argument("-G", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform 2D distribution. Non-random selects from 4 distributions: 1) Mimicking the micrograph ice thickness (darker areas = more particles), 2) Gaussian clumps, 3) circular, and 4) inverse circular. Default is %(default)s which selects a distribution per micrograph based on internal weights.")
@@ -134,7 +188,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("--no_mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
     output_group.add_argument("-P", "--png", action="store_true", help="Save micrographs as .png")
     output_group.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
-    output_group.add_argument("-Q", "--jpeg-quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
+    output_group.add_argument("-Q", "--jpeg_quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
     output_group.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs by Fourier cropping after superimposing particle projections. Binning is the sidelength divided by this factor (e.g. -b 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph) (e.g. -b 1 is unbinned). Default is %(default)s")
     output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
     output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
@@ -163,6 +217,26 @@ def parse_arguments(script_start_time):
     if not (args.mrc or args.png or args.jpeg):
         parser.error("No format specified for saving images. Please specify at least one format.")
 
+    if not os.path.isfile(args.image_list_file):
+        parser.error("The specified --image_list_file does not exist.")
+
+    if not os.path.isdir(args.image_directory):
+        parser.error("The specified --image_directory does not exist.")
+
+    validate_positive_int(parser, "--num_images", args.num_images)
+    validate_positive_float(parser, "--apix", args.apix)
+    validate_positive_float(parser, "--pdb_to_mrc_resolution", args.pdb_to_mrc_resolution)
+    validate_positive_float(parser, "--min_ice_thickness", args.min_ice_thickness)
+    validate_positive_float(parser, "--max_ice_thickness", args.max_ice_thickness)
+    validate_positive_float(parser, "--ice_thickness", args.ice_thickness)
+    validate_positive_float(parser, "--ampcont", args.ampcont)
+    validate_positive_float(parser, "--voltage", args.voltage)
+    validate_positive_int(parser, "--json_scale", args.json_scale)
+    validate_positive_int(parser, "--parallel_processes", args.parallel_processes)
+
+    if args.jpeg_quality < 0:
+        parser.error("--jpeg_quality must be an integer.")
+
     # Determine output directory
     if not args.output_directory:
         # Create a unique directory name using the date and time that the script was run
@@ -185,40 +259,6 @@ def parse_arguments(script_start_time):
     print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
 
     return args
-
-def check_num_particles(value):
-    """
-    Check if the number of particles is within the allowed range or 'max'.
-
-    :param int/str value: Number of particles as an integer or 'max' as a string.
-    :return int/str: Value if it is valid or 'max'.
-    :raises ArgumentTypeError: If the value is not in the allowed range and not 'max'.
-    """
-    # Allow 'max' (case insensitive) to specify the maximum number of particles
-    if str(value).lower() == 'max':
-        return 'max'
-
-    try:
-        ivalue = int(value)
-        if ivalue < 2 or ivalue >= 1000000:
-            raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000")
-        return ivalue
-    except ValueError:
-        raise argparse.ArgumentTypeError("Number of particles must be an integer between 2 and 1000000 or 'max'")
-
-def check_binning(value):
-    """
-    Check if the binning is within the allowed range.
-    This function exists just so that ./virtualice.py -h doesn't blow up.
-
-    :param int value: Binning requested.
-    :return int: Value if it is valid.
-    :raises ArgumentTypeError: If the value is not in the allowed range.
-    """
-    ivalue = int(value)
-    if ivalue < 2 or ivalue >= 64:
-        raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
-    return ivalue
 
 def setup_logging(script_start_time, verbosity):
     """
@@ -351,6 +391,7 @@ def is_emdb_id(input_str):
     :return bool: True if the input string is a valid EMDB ID format, False otherwise.
     """
     print_and_log("", logging.DEBUG)
+    # EMDB ID must be 4 or 5 numbers
     return input_str.isdigit() and (len(input_str) == 4 or len(input_str) == 5)
 
 def is_pdb_id(structure_input):
@@ -363,72 +404,6 @@ def is_pdb_id(structure_input):
     print_and_log("", logging.DEBUG)
     # PDB ID must be 4 characters: first character is a number, next 3 are alphanumeric, and there must be at least one letter
     return bool(re.match(r'^[0-9][A-Za-z0-9]{3}$', structure_input) and any(char.isalpha() for char in structure_input))
-
-def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
-    """
-    Process each structure input by identifying whether it's a PDB ID for download, EMDB ID for download, a local file path, or a request for a random structure.
-    Normalize any input .map/.mrc file and convert to .mrc.
-
-    :param str structure_input: The structure input which could be a PDB ID, EMDB ID, a local file path, a request for a random PDB/EMDB structure ('r' or 'random'), a request for a random PDB structure ('rp'), a request for a random EMDB structure ('re' or 'rm').
-    :param float std_devs_above_mean: Number of standard deviations above the mean to threshold downloaded/imported .mrc/.map files (for getting rid of some dust).
-    :param float pixelsize: Pixel size of the micrograph onto which mrcs will be projected. Used to scale downloaded/imported .pdb/.mrc/.map files.
-    :return tuple: A tuple containing the structure ID and file type if the file is successfully identified, downloaded, or a random structure is selected; None if there was an error or the download failed.
-    """
-    print_and_log("", logging.DEBUG)
-    def process_local_mrc_file(file_path):
-        converted_file = normalize_and_convert_mrc(file_path)
-        threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
-        scale_mrc_file(f"{converted_file}.mrc", pixelsize)
-        converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
-        return (converted_file, "mrc") if converted_file else None
-
-    def download_random_pdb_structure():
-        print_and_log("Downloading a random PDB...", logging.INFO)
-        pdb_id = download_random_pdb()
-        return (pdb_id, "pdb") if pdb_id else None
-
-    def download_random_emdb_structure():
-        print_and_log("Downloading a random EMDB map...", logging.INFO)
-        emdb_id = download_random_emdb()
-        structure_input = f"emd_{emdb_id}.map"
-        return process_local_mrc_file(structure_input) if emdb_id else None
-
-    if structure_input.lower() in ['r', 'random']:
-        if random.choice(["pdb", "emdb"]) == "pdb":
-            return download_random_pdb_structure()
-        else:
-            return download_random_emdb_structure()
-    elif structure_input.lower() == 'rp':
-        return download_random_pdb_structure()
-    elif structure_input.lower() == 're' or structure_input.lower() == 'rm':
-        return download_random_emdb_structure()
-    elif is_local_pdb_path(structure_input):
-        print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
-        # Make a local copy of the file
-        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
-            shutil.copy(structure_input, os.path.basename(structure_input))
-        return (os.path.basename(structure_input).split('.')[0], "pdb")
-    elif is_local_mrc_path(structure_input):
-        print_and_log(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
-        # Make a local copy of the file
-        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
-            shutil.copy(structure_input, os.path.basename(structure_input))
-        return process_local_mrc_file(structure_input)
-    elif is_emdb_id(structure_input):
-        if download_emdb(structure_input):
-            structure_input = f"emd_{structure_input}.map"
-            return process_local_mrc_file(structure_input)
-        else:
-            return None
-    elif is_pdb_id(structure_input):
-        if download_pdb(structure_input):
-            return (structure_input, "pdb")
-        else:
-            print_and_log(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
-            return None
-    else:
-        print_and_log(f"Unrecognized structure input: {structure_input}. Please enter a valid PDB ID, EMDB ID, local file path, or 'random'.", logging.WARNING)
-        return None
 
 def download_pdb(pdb_id, suppress_errors=False):
     """
@@ -528,6 +503,72 @@ def download_random_emdb():
         success = download_emdb(emdb_id, suppress_errors=True)
         if success:
             return emdb_id
+
+def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
+    """
+    Process each structure input by identifying whether it's a PDB ID for download, EMDB ID for download, a local file path, or a request for a random structure.
+    Normalize any input .map/.mrc file and convert to .mrc.
+
+    :param str structure_input: The structure input which could be a PDB ID, EMDB ID, a local file path, a request for a random PDB/EMDB structure ('r' or 'random'), a request for a random PDB structure ('rp'), a request for a random EMDB structure ('re' or 'rm').
+    :param float std_devs_above_mean: Number of standard deviations above the mean to threshold downloaded/imported .mrc/.map files (for getting rid of some dust).
+    :param float pixelsize: Pixel size of the micrograph onto which mrcs will be projected. Used to scale downloaded/imported .pdb/.mrc/.map files.
+    :return tuple: A tuple containing the structure ID and file type if the file is successfully identified, downloaded, or a random structure is selected; None if there was an error or the download failed.
+    """
+    print_and_log("", logging.DEBUG)
+    def process_local_mrc_file(file_path):
+        converted_file = normalize_and_convert_mrc(file_path)
+        threshold_mrc_file(f"{converted_file}.mrc", std_devs_above_mean)
+        scale_mrc_file(f"{converted_file}.mrc", pixelsize)
+        converted_file = normalize_and_convert_mrc(f"{converted_file}.mrc")
+        return (converted_file, "mrc") if converted_file else None
+
+    def download_random_pdb_structure():
+        print_and_log("Downloading a random PDB...", logging.INFO)
+        pdb_id = download_random_pdb()
+        return (pdb_id, "pdb") if pdb_id else None
+
+    def download_random_emdb_structure():
+        print_and_log("Downloading a random EMDB map...", logging.INFO)
+        emdb_id = download_random_emdb()
+        structure_input = f"emd_{emdb_id}.map"
+        return process_local_mrc_file(structure_input) if emdb_id else None
+
+    if structure_input.lower() in ['r', 'random']:
+        if random.choice(["pdb", "emdb"]) == "pdb":
+            return download_random_pdb_structure()
+        else:
+            return download_random_emdb_structure()
+    elif structure_input.lower() == 'rp':
+        return download_random_pdb_structure()
+    elif structure_input.lower() == 're' or structure_input.lower() == 'rm':
+        return download_random_emdb_structure()
+    elif is_local_pdb_path(structure_input):
+        print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
+        # Make a local copy of the file
+        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
+            shutil.copy(structure_input, os.path.basename(structure_input))
+        return (os.path.basename(structure_input).split('.')[0], "pdb")
+    elif is_local_mrc_path(structure_input):
+        print_and_log(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
+        # Make a local copy of the file
+        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
+            shutil.copy(structure_input, os.path.basename(structure_input))
+        return process_local_mrc_file(structure_input)
+    elif is_emdb_id(structure_input):
+        if download_emdb(structure_input):
+            structure_input = f"emd_{structure_input}.map"
+            return process_local_mrc_file(structure_input)
+        else:
+            return None
+    elif is_pdb_id(structure_input):
+        if download_pdb(structure_input):
+            return (structure_input, "pdb")
+        else:
+            print_and_log(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
+            return None
+    else:
+        print_and_log(f"Unrecognized structure input: {structure_input}. Please enter a valid PDB ID, EMDB ID, local file path, or 'random'.", logging.WARNING)
+        return None
 
 def normalize_and_convert_mrc(input_file):
     """
@@ -1328,7 +1369,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     :param int border_distance: The minimum distance between particles and the image border.
     :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
     :param str dist_type: Particle location generation distribution type - 'random' or 'non-random'.
-    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non-random' - 'circular', 'inverse circular', or 'gaussian'.
+    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non-random' - 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
     """
     print_and_log("", logging.DEBUG)
@@ -1389,7 +1430,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                 else:
                     attempts += 1  # Increment attempts counter if addition is unsuccessful
 
-        elif non_random_dist_type == 'inverse circular':
+        elif non_random_dist_type == 'inverse_circular':
             # Parameters for the exclusion zone
             # Randomly determine the center within the image, away from the edges
             exclusion_center_x = np.random.randint(border_distance + half_small_image_width, width - border_distance - half_small_image_width)
@@ -1716,7 +1757,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
     :param str output_path: The file path to save the resulting micrograph.
     :param str dist_type: The type of distribution (random or non-random) for placing particles in micrographs.
-    :param str non_random_dist_type: The type of non-random distribution (circular, inverse circular, gaussian) for placing particles in micrographs.
+    :param str non_random_dist_type: The type of non-random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
     :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
@@ -1937,12 +1978,12 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.1, 0.9])
         if dist_type == 'non-random':
             # Randomly select a non-random distribution, weighted towards micrograph because it is the most realistic. Note: gaussian can create 1-5 gaussian blobs on the micrograph
-            non_random_dist_type = np.random.choice(['circular', 'inverse circular', 'gaussian', 'micrograph'], p=[0.0025, 0.0075, 0.19, 0.8])
+            non_random_dist_type = np.random.choice(['circular', 'inverse_circular', 'gaussian', 'micrograph'], p=[0.0025, 0.0075, 0.19, 0.8])
             if not args.num_particles:
                 if non_random_dist_type == 'circular':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                     num_particles = max(num_particles // 2, 2)  # Minimum number of particles is 2
-                elif non_random_dist_type == 'inverse circular':
+                elif non_random_dist_type == 'inverse_circular':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                     num_particles = max(num_particles * 2 // 3, 2)
                 elif non_random_dist_type == 'gaussian':
