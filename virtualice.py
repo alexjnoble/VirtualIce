@@ -164,6 +164,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-A", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
     simulation_group.add_argument("-F", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
     simulation_group.add_argument("--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
+    simulation_group.add_argument("--bfactor", type=float, default=50, help="B-factor in A^2 (EMAN2 e2proc2d.py option). Default is %(default)s")
     simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
     simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
@@ -180,8 +181,8 @@ def parse_arguments(script_start_time):
     particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Particles will be extracted to the [structure_name]/Particles/ directory as .mrc files. Default is no cropping.")
     particle_cropping_group.add_argument("-X", "--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
 
-    # Micrograph Output Options
-    output_group = parser.add_argument_group('Micrograph Output Options')
+    # Micrograph and Coordinate Output Options
+    output_group = parser.add_argument_group('Micrograph and Coordinate Output Options')
     output_group.add_argument("-o", "--output_directory", type=str, help="Directory to save all output files. If not specified, a unique directory will be created.")
     output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
     output_group.add_argument("--no_mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
@@ -1527,15 +1528,15 @@ def estimate_noise_parameters(mrc_path):
     """
     with mrcfile.open(mrc_path, mode='r') as mrc:
         image = mrc.data.astype(np.float32)
-        
+
         # Calculate mean and variance across the image
         mean = np.mean(image)
         variance = np.var(image)
-        
+
         # Poisson noise component is approximated by the mean
         # Gaussian noise component is the excess variance over the Poisson component
         gaussian_variance = variance - mean
-        
+
         return mean, gaussian_variance
 
 def process_slice(args):
@@ -1744,7 +1745,7 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
 
     return blended_image, filtered_particle_locations
 
-def add_images(large_image_path, small_images, scale_percent, structure_name, border_distance, edge_particles, save_edge_coordinates, scale, output_path, dist_type, non_random_dist_type, imod_coordinate_file, coord_coordinate_file, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance, save_as_mrc, save_as_png, save_as_jpeg, jpeg_quality):
+def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
@@ -1771,9 +1772,42 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
     :param bool save_as_png: Boolean to save the resulting synthetic micrograph and an PNG file.
     :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
     :param int jpeg_quality: Quality of the JPEG image.
-    :return int: The actual number of particles added to the micrograph.
+    :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
     """
+    # Extract input options
+    large_image_path = input_options['large_image_path']
+    small_images = input_options['small_images']
+    structure_name = input_options['structure_name']
+
+    # Extract particle and micrograph generation options
+    scale_percent = particle_and_micrograph_generation_options['scale_percent']
+    dist_type = particle_and_micrograph_generation_options['dist_type']
+    non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
+    border_distance = particle_and_micrograph_generation_options['border_distance']
+    edge_particles = particle_and_micrograph_generation_options['edge_particles']
+    save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
+    gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
+
+    # Extract simulation options
+    scale = simulation_options['scale']
+
+    # Extract junk labels options
+    no_junk_filter = junk_labels_options['no_junk_filter']
+    flip_x = junk_labels_options['flip_x']
+    flip_y = junk_labels_options['flip_y']
+    json_scale = junk_labels_options['json_scale']
+    polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
+
+    # Extract output options
+    save_as_mrc = output_options['save_as_mrc']
+    save_as_png = output_options['save_as_png']
+    save_as_jpeg = output_options['save_as_jpeg']
+    jpeg_quality = output_options['jpeg_quality']
+    imod_coordinate_file = output_options['imod_coordinate_file']
+    coord_coordinate_file = output_options['coord_coordinate_file']
+    output_path = output_options['output_path']
     print_and_log("", logging.DEBUG)
+
     # Read micrograph and particles, and get some information
     large_image = readmrc(large_image_path)
     small_images = readmrc(small_images)
@@ -1813,7 +1847,7 @@ def add_images(large_image_path, small_images, scale_percent, structure_name, bo
 def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     """
     Crops particles from a single micrograph.
-    
+
     :param str micrograph_path: Path to the micrograph.
     :param DataFrame particle_rows: DataFrame rows of particles to be cropped from the micrograph.
     :param str particles_dir: Directory to save cropped particles.
@@ -1860,7 +1894,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     star_file_path = os.path.join(structure_dir, f'{structure_dir}.star')
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
-    
+
     grouped_df = df.groupby('micrograph_name')
     total_cropped = 0
 
@@ -1872,11 +1906,11 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
             if not os.path.exists(micrograph_path):
                 print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
                 continue
-            
+
             print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
             future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size)
             futures.append(future)
-        
+
         # Optional: Wait for all futures to complete if you need to process results further
         for future in futures:
             total_cropped += future.result()
@@ -2027,13 +2061,39 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         print_and_log(f"Applying CTF based on the recorded defocus ({float(defocus):.4f} microns) and microscope parameters (Voltage: {args.voltage}keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) that were used to collect the micrograph...", logging.INFO)
         output = subprocess.run(["e2proc2d.py", "--mult=-1", 
-                        "--process", f"math.simulatectf:ampcont={args.ampcont}:bfactor=50:apix={args.apix}:cs={args.Cs}:defocus={defocus}:voltage={args.voltage}", 
+                        "--process", f"math.simulatectf:ampcont={args.ampcont}:bfactor={args.bfactor}:apix={args.apix}:cs={args.Cs}:defocus={defocus}:voltage={args.voltage}", 
                         "--process", "normalize.edgemean", f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"], capture_output=True, text=True).stdout
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {5/ice_thickness:.1f}...", logging.INFO)
-        num_particles_projected, num_particles_with_saved_coordinates = add_images(f"{args.image_directory}/{fname}.mrc", f"temp_{structure_name}_noise_CTF.mrc", args.scale_percent, structure_name, args.border, args.edge_particles, args.save_edge_coordinates, ice_thickness, f"{structure_name}/{fname}_{structure_name}{repeat_suffix}", dist_type, non_random_dist_type, args.imod_coordinate_file, args.coord_coordinate_file, args.no_junk_filter, args.json_scale, args.flip_x, args.flip_y, args.polygon_expansion_distance, gaussian_variance, args.mrc, args.png, args.jpeg, args.jpeg_quality)
+        print_and_log(f"Adding the {num_particles} structure volume projections to the micrograph{f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {fudge_factor/ice_thickness:.1f}...", logging.INFO)
+
+        # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
+        input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
+            'small_images': f"temp_{structure_name}_noise_CTF.mrc",
+            'structure_name': structure_name }
+        particle_and_micrograph_generation_options = { 'scale_percent': args.scale_percent,
+            'dist_type': dist_type,
+            'non_random_dist_type': non_random_dist_type,
+            'border_distance': args.border,
+            'edge_particles': args.edge_particles,
+            'save_edge_coordinates': args.save_edge_coordinates,
+            'gaussian_variance': gaussian_variance }
+        simulation_options = { 'scale': ice_thickness }
+        junk_labels_options = { 'no_junk_filter': args.no_junk_filter,
+            'flip_x': args.flip_x,
+            'flip_y': args.flip_y,
+            'json_scale': args.json_scale,
+            'polygon_expansion_distance': args.polygon_expansion_distance }
+        output_options = { 'save_as_mrc': args.mrc,
+            'save_as_png': args.png,
+            'save_as_jpeg': args.jpeg,
+            'jpeg_quality': args.jpeg_quality,
+            'imod_coordinate_file': args.imod_coordinate_file,
+            'coord_coordinate_file': args.coord_coordinate_file,
+            'output_path': f"{structure_name}/{fname}_{structure_name}{repeat_suffix}" }
+
+        num_particles_projected, num_particles_with_saved_coordinates = add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
         print_and_log("Done!", logging.INFO)
         total_num_particles_projected += num_particles_projected
         total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
@@ -2084,7 +2144,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         # Write the subsequent lines
         f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
-    
+
     box_size = get_mrc_box_size(f"{structure_name}.mrc")
 
     # Cleanup
