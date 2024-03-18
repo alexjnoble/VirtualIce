@@ -1658,7 +1658,7 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
 
     return collage
 
-def blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance):
+def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -1685,6 +1685,44 @@ def blend_images(large_image, small_images, scale_percent, half_small_image_widt
     :return numpy_array: The blended large image.
     """
     print_and_log("", logging.DEBUG)
+    # Extract input options
+    large_image = input_options['large_image']
+    large_image_path = input_options['large_image_path']
+    small_images = input_options['small_images']
+    structure_name = input_options['structure_name']
+    particle_locations = input_options['particle_locations']
+    image_size = input_options['image_size']
+    num_small_images = input_options['num_small_images']
+    half_small_image_width = input_options['half_small_image_width']
+
+    # Extract particle and micrograph generation options
+    scale_percent = particle_and_micrograph_generation_options['scale_percent']
+    dist_type = particle_and_micrograph_generation_options['dist_type']
+    non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
+    border_distance = particle_and_micrograph_generation_options['border_distance']
+    edge_particles = particle_and_micrograph_generation_options['edge_particles']
+    save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
+    gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
+
+    # Extract simulation options
+    scale = simulation_options['scale']
+
+    # Extract junk labels options
+    no_junk_filter = junk_labels_options['no_junk_filter']
+    flip_x = junk_labels_options['flip_x']
+    flip_y = junk_labels_options['flip_y']
+    json_scale = junk_labels_options['json_scale']
+    polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
+
+    # Extract output options
+    save_as_mrc = output_options['save_as_mrc']
+    save_as_png = output_options['save_as_png']
+    save_as_jpeg = output_options['save_as_jpeg']
+    jpeg_quality = output_options['jpeg_quality']
+    imod_coordinate_file = output_options['imod_coordinate_file']
+    coord_coordinate_file = output_options['coord_coordinate_file']
+    output_path = output_options['output_path']
+
     json_file_path = os.path.splitext(large_image_path)[0] + ".json"
     if not no_junk_filter:
         if os.path.exists(json_file_path):
@@ -1774,6 +1812,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param int jpeg_quality: Quality of the JPEG image.
     :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
     """
+    print_and_log("", logging.DEBUG)
     # Extract input options
     large_image_path = input_options['large_image_path']
     small_images = input_options['small_images']
@@ -1806,7 +1845,6 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     imod_coordinate_file = output_options['imod_coordinate_file']
     coord_coordinate_file = output_options['coord_coordinate_file']
     output_path = output_options['output_path']
-    print_and_log("", logging.DEBUG)
 
     # Read micrograph and particles, and get some information
     large_image = readmrc(large_image_path)
@@ -1818,12 +1856,23 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
     particle_locations = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
 
+    # Modify dictionary parameters to pass to make it easy to add/change parameters with continued development
+    input_options = { 'large_image': large_image,
+        'large_image_path': large_image_path,
+        'small_images': small_images,
+        'structure_name': structure_name,
+        'particle_locations': particle_locations,
+        'image_size': image_size,
+        'num_small_images': num_small_images,
+        'half_small_image_width': half_small_image_width }
+
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image, filtered_particle_locations = blend_images(large_image, small_images, scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance)
+        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
     else:
         print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...", logging.INFO)
-        result_image, filtered_particle_locations = blend_images(large_image, small_images[:len(particle_locations), :, :], scale_percent, half_small_image_width, particle_locations, border_distance, save_edge_coordinates, scale, structure_name, imod_coordinate_file, coord_coordinate_file, large_image_path, output_path, no_junk_filter, json_scale, flip_x, flip_y, polygon_expansion_distance, gaussian_variance)
+        input_options['small_images'] = small_images[:len(particle_locations), :, :]
+        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
