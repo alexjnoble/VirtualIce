@@ -145,13 +145,15 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
-    particle_micrograph_group.add_argument("-T", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
-    particle_micrograph_group.add_argument("-f", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
-    particle_micrograph_group.add_argument("-G", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
+    particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
+    particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
+    particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform 2D distribution. Non-random selects from 4 distributions: 1) Mimicking the micrograph ice thickness (darker areas = more particles), 2) Gaussian clumps, 3) circular, and 4) inverse circular. Default is %(default)s which selects a distribution per micrograph based on internal weights.")
-    particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is  %(default)s = reverts to half boxsize")
-    particle_micrograph_group.add_argument("--edge_particles", action="store_true", help="Allow particles to be placed up to the edge of the micrograph.")
-    particle_micrograph_group.add_argument("--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than half a particle box size from the edge, requires --edge_particles to be True or --border to be less than half the particle box size.")
+    particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
+    particle_micrograph_group.add_argument("-ne", "--no_edge_particles", action="store_true", help="Prevent particles from being placed up to the edge of the micrograph. By default, particles can be placed up to the edge.")
+    particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
+    # TBD: Need to make a new border distance value for which partiles are saved based on distance from the borders
+    #particle_micrograph_group.add_argument("-sb", "--save_border", type=int, default=None, help="Minimum distance from the image border required to save a particle's coordinates to the output files. Default is %(default)s, which will use the value of --border if specified, otherwise half of the particle box size.")
 
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
@@ -159,22 +161,22 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=90, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness")
     simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
-    simulation_group.add_argument("-E", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
-    simulation_group.add_argument("--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
-    simulation_group.add_argument("-A", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
-    simulation_group.add_argument("-F", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
-    simulation_group.add_argument("--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
-    simulation_group.add_argument("--bfactor", type=float, default=50, help="B-factor in A^2 (EMAN2 e2proc2d.py option). Default is %(default)s")
+    simulation_group.add_argument("-ea", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
+    simulation_group.add_argument("-om", "--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
+    simulation_group.add_argument("-da", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
+    simulation_group.add_argument("-ph", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
+    simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
+    simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 (EMAN2 e2proc2d.py option). Default is %(default)s")
     simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
     simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
     # Junk Labels Options
     junk_labels_group = parser.add_argument_group('Junk Labels Options')
-    junk_labels_group.add_argument("--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Do not remove particles from coordinate files that are on/near junk or substrate.")
+    junk_labels_group.add_argument("-nj", "--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Do not remove particles from coordinate files that are on/near junk or substrate.")
     junk_labels_group.add_argument("-S", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the JSON files with AnyLabeling. Default is %(default)s")
     junk_labels_group.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
     junk_labels_group.add_argument("-y", "--flip_y", action="store_true", help="Flip the polygons that identify junk along the y-axis")
-    junk_labels_group.add_argument("-e", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the JSON file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the JSON file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
+    junk_labels_group.add_argument("-pe", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the JSON file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the JSON file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
 
     # Particle Cropping Options
     particle_cropping_group = parser.add_argument_group('Particle Cropping Options')
@@ -1360,7 +1362,7 @@ def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons
 
     return filtered_particle_locations
 
-def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type):
+def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type):
     """
     Generate random/non-random locations for particles within an image.
 
@@ -1369,7 +1371,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     :param int num_small_images: The number of small images or particles to generate coordinates for.
     :param int half_small_image_width: Half the width of a small image.
     :param int border_distance: The minimum distance between particles and the image border.
-    :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
+    :param bool no_edge_particles: Prevent particles from being placed up to the edge of the micrograph.
     :param str dist_type: Particle location generation distribution type - 'random' or 'non-random'.
     :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non-random' - 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
@@ -1377,8 +1379,9 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     print_and_log("", logging.DEBUG)
     width, height = image_size
 
-    # If edge_particles is set to True, allow particles to go all the way to the edge of the micrograph
-    border_distance = -1 if edge_particles else max(border_distance, half_small_image_width)
+    # If no_edge_particles is set, respect the user-defined --border value, 
+    # otherwise use half of the particle box size as the default minimum distance from the edge
+    border_distance = max(border_distance, half_small_image_width) if no_edge_particles else -1
 
     particle_locations = []
 
@@ -1450,11 +1453,11 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
             while len(particle_locations) < num_small_images and attempts < max_attempts:
                 x = np.random.randint(border_distance, width - border_distance)
                 y = np.random.randint(border_distance, height - border_distance)
-
+                new_particle_location = (x, y)
                 # Check if the location is outside the exclusion zone
                 if np.sqrt((x - exclusion_center_x) ** 2 + (y - exclusion_center_y) ** 2) > exclusion_radius:
-                    if is_far_enough((x, y), particle_locations, half_small_image_width):
-                        particle_locations.append((x, y))
+                    if is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+                        particle_locations.append(new_particle_location)
                         attempts = 0  # Reset attempts counter after successful addition
                     else:
                         attempts += 1  # Increment attempts counter if addition is unsuccessful
@@ -1475,7 +1478,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                                                                     height - center[1] - border_distance))
                 gaussians.append((center, stddev))
 
-            attempts = 0  # Reset attempts counter for Gaussian distribution
+            attempts = 0  # Reset attempts counter
             # Keep generating and appending particle locations until we have enough.
             while len(particle_locations) < num_small_images and attempts < max_attempts:
                 # Randomly select one of the Gaussian distributions.
@@ -1506,16 +1509,26 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
 
             # Flatten the probability map and generate indices
             flat_prob_map = prob_map.ravel()
-            idx = np.arange(width * height)
 
-            # Choose locations based on the probability map
-            chosen_indices = np.random.choice(idx, size=num_small_images, replace=False, p=flat_prob_map)
-            y_coords, x_coords = np.unravel_index(chosen_indices, (height, width))
+            # Generate a large batch of random choices before the loop
+            batch_size = num_small_images * 10
+            random_indices = np.random.choice(flat_prob_map.size, size=batch_size, p=flat_prob_map)
 
-            # Ensure particles are placed within borders
-            for x, y in zip(x_coords, y_coords):
-                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance:
-                    particle_locations.append((x, y))
+            # Initialize the attempt counter for 'micrograph' distribution
+            attempts = 0  # Reset attempts counter
+            index_counter = 0  # Counter to iterate through the batch of random choices
+            while len(particle_locations) < num_small_images and index_counter < batch_size and attempts < max_attempts:
+                chosen_index = random_indices[index_counter]
+                index_counter += 1
+                y, x = divmod(chosen_index, width)
+
+                new_particle_location = (x, y)
+                # Check if the new location is within borders and far enough from other particles
+                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+                    particle_locations.append(new_particle_location)
+                    attempts = 0  # Reset attempts counter after successful addition
+                else:
+                    attempts += 1  # Increment attempts counter if addition is unsuccessful
 
     return particle_locations
 
@@ -1700,7 +1713,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     dist_type = particle_and_micrograph_generation_options['dist_type']
     non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
     border_distance = particle_and_micrograph_generation_options['border_distance']
-    edge_particles = particle_and_micrograph_generation_options['edge_particles']
+    no_edge_particles = particle_and_micrograph_generation_options['no_edge_particles']
     save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
     gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
 
@@ -1792,7 +1805,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param float scale_percent: The percentage to scale the volume for trimming.
     :param str structure_name: The name of the structure file.
     :param int border_distance: The minimum distance between particles and the image border.
-    :param bool edge_particles: Allow particles to be placed up to the edge of the micrograph.
+    :param bool no_edge_particles: Allow particles to be placed up to the edge of the micrograph.
     :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
     :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
     :param str output_path: The file path to save the resulting micrograph.
@@ -1823,7 +1836,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     dist_type = particle_and_micrograph_generation_options['dist_type']
     non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
     border_distance = particle_and_micrograph_generation_options['border_distance']
-    edge_particles = particle_and_micrograph_generation_options['edge_particles']
+    no_edge_particles = particle_and_micrograph_generation_options['no_edge_particles']
     save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
     gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
 
@@ -1854,7 +1867,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     half_small_image_width = int(small_images.shape[1]/2)
 
     # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
-    particle_locations = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, edge_particles, dist_type, non_random_dist_type)
+    particle_locations = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type)
 
     # Modify dictionary parameters to pass to make it easy to add/change parameters with continued development
     input_options = { 'large_image': large_image,
@@ -2125,7 +2138,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
             'dist_type': dist_type,
             'non_random_dist_type': non_random_dist_type,
             'border_distance': args.border,
-            'edge_particles': args.edge_particles,
+            'no_edge_particles': args.no_edge_particles,
             'save_edge_coordinates': args.save_edge_coordinates,
             'gaussian_variance': gaussian_variance }
         simulation_options = { 'scale': ice_thickness }
