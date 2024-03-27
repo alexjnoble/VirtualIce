@@ -266,6 +266,7 @@ def setup_logging(script_start_time, verbosity):
     """
     Sets up logging configuration for both console and file output based on the specified verbosity level.
 
+    :param int script_start_time: Timestamp used for naming the log file.
     :param int verbosity: A value that determines the level of detail for log messages. Supports:
       - 0 for ERROR level messages only,
       - 1 for WARNING level and above,
@@ -280,28 +281,33 @@ def setup_logging(script_start_time, verbosity):
 
     # Map verbosity to logging level
     levels = {0: logging.ERROR, 1: logging.WARNING, 2: logging.INFO, 3: logging.DEBUG}
-    logging_level = levels.get(verbosity, logging.INFO)
+    console_logging_level = levels.get(verbosity, logging.INFO)
 
     log_filename = f"virtualice_{script_start_time}.log"
 
+    # Formatters for logging
     simple_formatter = logging.Formatter('%(message)s')
     detailed_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d, %(funcName)s)')
 
-    fh = logging.FileHandler(log_filename)
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(detailed_formatter)
+    # File handler for logging, always records at least INFO level
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setLevel(logging.INFO)  # Default to INFO level for file logging
+    file_handler.setFormatter(detailed_formatter)
 
-    ch = logging.StreamHandler()
-    ch.setLevel(logging_level)
+    # Console handler for logging, respects the verbosity level set by the user
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(console_logging_level)
     if verbosity < 3:
-        ch.setFormatter(simple_formatter)
+        console_handler.setFormatter(simple_formatter)
     else:
-        ch.setFormatter(detailed_formatter)
+        console_handler.setFormatter(detailed_formatter)
+        file_handler.setLevel(logging.DEBUG)  # Set file logging to DEBUG for verbosity 3
 
+    # Configuring the logger
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(fh)
-    logger.addHandler(ch)
+    logger.setLevel(logging.DEBUG)  # Set logger to highest level to handle all messages
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 def print_and_log(message, level=logging.INFO):
     """
@@ -327,7 +333,7 @@ def print_and_log(message, level=logging.INFO):
 
         # Skip logging debug information for print_and_log calls to avoid recursion
         if func_name != 'print_and_log':
-            # Retrieve function parameters and their values for verbosity level 3
+            # Retrieve function arameters and their values for verbosity level 3
             args, _, _, values = inspect.getargvalues(caller_frame)
             args_info = ', '.join([f"{arg}={values[arg]}" for arg in args])
 
