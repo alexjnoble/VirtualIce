@@ -135,7 +135,7 @@ def parse_arguments(script_start_time):
 
     # Input Options
     input_group = parser.add_argument_group('Input Options')
-    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Default is %(default)s.")
+    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
     input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
 
@@ -148,7 +148,7 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
     particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
     particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
-    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non-random'], default=None, help="Distribution type for generating particle locations: 'random' (or 'r') and 'non-random' (or 'n'). Random is a random selection from a uniform 2D distribution. Non-random selects from 4 distributions: 1) Mimicking the micrograph ice thickness (darker areas = more particles), 2) Gaussian clumps, 3) circular, and 4) inverse circular. Default is %(default)s which selects a distribution per micrograph based on internal weights.")
+    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non_random', 'm', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("-ne", "--no_edge_particles", action="store_true", help="Prevent particles from being placed up to the edge of the micrograph. By default, particles can be placed up to the edge.")
     particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
@@ -1372,8 +1372,8 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     :param int half_small_image_width: Half the width of a small image.
     :param int border_distance: The minimum distance between particles and the image border.
     :param bool no_edge_particles: Prevent particles from being placed up to the edge of the micrograph.
-    :param str dist_type: Particle location generation distribution type - 'random' or 'non-random'.
-    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non-random' - 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
+    :param str dist_type: Particle location generation distribution type - 'random' or 'non_random'.
+    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non_random' - 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
     """
     print_and_log("", logging.DEBUG)
@@ -1415,7 +1415,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
             else:
                 attempts += 1  # Increment attempts counter if addition is unsuccessful
 
-    elif dist_type == 'non-random':
+    elif dist_type == 'non_random':
         if non_random_dist_type == 'circular':
             # Make a circular cluster of particles
             cluster_center = (width // 2, height // 2)
@@ -1809,8 +1809,8 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
     :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
     :param str output_path: The file path to save the resulting micrograph.
-    :param str dist_type: The type of distribution (random or non-random) for placing particles in micrographs.
-    :param str non_random_dist_type: The type of non-random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
+    :param str dist_type: The type of distribution (random or non_random) for placing particles in micrographs.
+    :param str non_random_dist_type: The type of non_random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
     :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
@@ -1995,14 +1995,14 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     """
     print_and_log("", logging.DEBUG)
     # Convert short distribution to full distribution name
-    distribution_mapping = {'r': 'random', 'n': 'non-random'}
+    distribution_mapping = {'r': 'random', 'n': 'non_random', 'm': 'micrograph', 'g': 'gaussian', 'c': 'circular', 'ic': 'inverse_circular'}
     distribution = distribution_mapping.get(args.distribution, args.distribution)
 
     # Create output directory
     if not os.path.exists(structure_name):
         os.mkdir(structure_name)
 
-    # Convert PDB to MRC for PDBs
+    # Convert PDB to MRC for PDBs and return the mass or estimate the mass of the MRC
     if structure_type == "pdb":
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
         print_and_log(f"Mass of PDB {structure_name}: {mass} kDa", logging.INFO)
@@ -2065,17 +2065,27 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
                  rand_num_particles if not args.num_particles else
                  max_num_particles)
 
-
         if args.num_particles:
             print_and_log(f"Attempting to add {int(num_particles)} particles to the micrograph...", logging.INFO)
         else:
             print_and_log("Choosing a random number of particles to attempt to add to the micrograph...", logging.INFO)
 
-        # Set the particle distribution type. If none is given (default), then 10% of the time it will choose random and 90% non-random
-        dist_type = distribution if distribution else np.random.choice(['random', 'non-random'], p=[0.1, 0.9])
-        if dist_type == 'non-random':
+        # Set the particle distribution type. If none is given (default), then 'micrograph' is used
+        non_random_distributions = {'micrograph', 'gaussian', 'circular', 'inverse_circular'}
+        if distribution in non_random_distributions:
+            dist_type = 'non_random'
+            non_random_dist_type = distribution
+        elif distribution == 'random':
+            dist_type = 'random'
+            non_random_dist_type = None
+        elif distribution == 'non_random':
+            dist_type = 'non_random'
             # Randomly select a non-random distribution, weighted towards micrograph because it is the most realistic. Note: gaussian can create 1-5 gaussian blobs on the micrograph
             non_random_dist_type = np.random.choice(['circular', 'inverse_circular', 'gaussian', 'micrograph'], p=[0.0025, 0.0075, 0.19, 0.8])
+        else:  # distribution == None
+            dist_type = 'non_random'
+            non_random_dist_type = 'micrograph'
+        if dist_type == 'non_random':
             if not args.num_particles:
                 if non_random_dist_type == 'circular':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
@@ -2086,8 +2096,6 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
                 elif non_random_dist_type == 'gaussian':
                     # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                     num_particles = max(num_particles // 4, 2)
-        else:
-            non_random_dist_type = None
 
         print_and_log(f"Done! {num_particles} particles will be added to the micrograph.\n", logging.INFO)
 
@@ -2128,7 +2136,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non-random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {fudge_factor/ice_thickness:.1f}...", logging.INFO)
+        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {fudge_factor/ice_thickness:.1f}...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
