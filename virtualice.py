@@ -158,8 +158,8 @@ def parse_arguments(script_start_time):
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
-    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=90, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
-    simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness")
+    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=1, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
+    simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
     simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
     simulation_group.add_argument("-ea", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
     simulation_group.add_argument("-om", "--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
@@ -333,7 +333,7 @@ def print_and_log(message, level=logging.INFO):
 
         # Skip logging debug information for print_and_log calls to avoid recursion
         if func_name != 'print_and_log':
-            # Retrieve function arameters and their values for verbosity level 3
+            # Retrieve function parameters and their values for verbosity level 3
             args, _, _, values = inspect.getargvalues(caller_frame)
             args_info = ', '.join([f"{arg}={values[arg]}" for arg in args])
 
@@ -1536,7 +1536,12 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                 else:
                     attempts += 1  # Increment attempts counter if addition is unsuccessful
 
-    return particle_locations
+    if non_random_dist_type == 'micrograph':
+        # This will make a non-linear gradient from the probability map (ice thickness gradient) that will scale the ice thickness +-20% from the given value
+        inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))  # 1 - prob_map because particles should be scaled to be darker in thinner areas and lighter in thinner areas
+        return particle_locations, inverse_normalized_prob_map
+    else:
+        return particle_locations, None
 
 def estimate_noise_parameters(mrc_path):
     """
@@ -1695,6 +1700,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
     :param str large_image_path: The path of the micrograph.
     :param str image_path: The output path.
+    :param numpy_array (optional) prob_map: A 2D numpy array representing the probability map used for local scaling of the collage. Each value in this map should be in the range [0, 1], where 0 represents the minimum scaling effect (darkest or thinnest ice) and 1 represents the maximum scaling effect (brightest or thickest ice). If provided, it modulates the scaling of the collage to simulate variations in particle visibility according to the underlying micrograph features. If `None`, a uniform scale is applied to the entire collage.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
     :param int json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
@@ -1713,6 +1719,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     image_size = input_options['image_size']
     num_small_images = input_options['num_small_images']
     half_small_image_width = input_options['half_small_image_width']
+    prob_map = input_options['prob_map']
 
     # Extract particle and micrograph generation options
     scale_percent = particle_and_micrograph_generation_options['scale_percent']
@@ -1791,7 +1798,10 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     large_image[:, :] = (large_image[:, :] - large_image[:, :].mean())/large_image[:, :].std()
 
     collage = create_collage(large_image, small_images, particle_locations, gaussian_variance)
-    collage *= scale  # Apply scaling if necessary
+    if prob_map is not None:
+        collage = collage * scale * prob_map  # Scale by local ice thickness
+    else:
+        collage *= scale  # Scale by uniform ice thickness
 
     blended_image = large_image + collage  # Blend the collage with the large image
 
@@ -1873,7 +1883,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     half_small_image_width = int(small_images.shape[1]/2)
 
     # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
-    particle_locations = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type)
+    particle_locations, prob_map = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type)
 
     # Modify dictionary parameters to pass to make it easy to add/change parameters with continued development
     input_options = { 'large_image': large_image,
@@ -1883,7 +1893,8 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
         'particle_locations': particle_locations,
         'image_size': image_size,
         'num_small_images': num_small_images,
-        'half_small_image_width': half_small_image_width }
+        'half_small_image_width': half_small_image_width,
+        'prob_map': prob_map }
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
@@ -2012,11 +2023,11 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     if structure_type == "pdb":
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
         print_and_log(f"Mass of PDB {structure_name}: {mass} kDa", logging.INFO)
-        fudge_factor = 5
+        fudge_factor = 4.8  # Note: larger number = darker particles
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
         print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
-        fudge_factor = 4
+        fudge_factor = 2.8
 
     # Write STAR header for the current synthetic dataset
     write_star_header(structure_name, args.apix, args.voltage, args.Cs)
@@ -2049,13 +2060,13 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(f"-------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
 
         # Random or user-specified ice thickness
-        # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there is a fudge factor of 5 just so the user gets a number that feels right)
+        # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there are fudge factors just so the user gets a number that feels right)
         if args.ice_thickness is None:
-            min_ice_thickness = fudge_factor/args.max_ice_thickness
-            max_ice_thickness = fudge_factor/args.min_ice_thickness
+            min_ice_thickness = fudge_factor/(0.32*args.max_ice_thickness + 20.45)
+            max_ice_thickness = fudge_factor/(0.32*args.min_ice_thickness + 20.45)
             ice_thickness = random.uniform(min_ice_thickness, max_ice_thickness)
         else:
-            ice_thickness = fudge_factor / args.ice_thickness
+            ice_thickness = fudge_factor / (0.32*args.ice_thickness + 20.45)
 
         fname = os.path.splitext(os.path.basename(fname))[0]
 
@@ -2142,7 +2153,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative ice thickness of {fudge_factor/ice_thickness:.1f}...", logging.INFO)
+        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative average ice thickness of {args.ice_thickness:.1f} nm...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
