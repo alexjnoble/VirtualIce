@@ -158,7 +158,7 @@ def parse_arguments(script_start_time):
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
-    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=1, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
+    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
     simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
     simulation_group.add_argument("-ea", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
@@ -198,8 +198,9 @@ def parse_arguments(script_start_time):
 
     # System and Program Options
     misc_group = parser.add_argument_group('System and Program Options')
-    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps. Default is the number of CPU cores available: %(default)s")
-    misc_group.add_argument("-j", "--parallel_processes", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
+    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to particle frames, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
+    misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
+    misc_group.add_argument("-pm", "--parallelize_micrographs", type=int, default=1, help="Number of parallel processes for generating each micrograph. Default is 1 (no parallelization)")
     misc_group.add_argument("-V", "--verbosity", type=int, default=1, help="Set verbosity level: 0 (quiet), 1 (some output), 2 (verbose), 3 (debug). For 0-2, a log file will be additionally written with 2. For 3, a log file will be additionally written with 3. Default is %(default)s")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
@@ -234,7 +235,7 @@ def parse_arguments(script_start_time):
     validate_positive_float(parser, "--ampcont", args.ampcont)
     validate_positive_float(parser, "--voltage", args.voltage)
     validate_positive_int(parser, "--json_scale", args.json_scale)
-    validate_positive_int(parser, "--parallel_processes", args.parallel_processes)
+    validate_positive_int(parser, "--parallelize_structures", args.parallelize_structures)
 
     if args.jpeg_quality < 0:
         parser.error("--jpeg_quality must be an integer.")
@@ -1757,9 +1758,9 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
             # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
             filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-            print_and_log(f"{num_particles_removed} particles removed from coordinate file(s) based on the corresponding JSON file.", logging.INFO)
+            print_and_log(f"{num_particles_removed} particles removed from coordinate file(s) based on the JSON file.", logging.INFO)
         else:
-            print_and_log(f"JSON file with polygons for bad micrograph areas not found: {json_file_path}", logging.WARNING)
+            print_and_log(f"No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
             filtered_particle_locations = particle_locations
     else:
         print_and_log("Skipping junk filtering (ie. not using JSON file)", logging.INFO)
@@ -2067,8 +2068,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
             ice_thickness = random.uniform(min_ice_thickness, max_ice_thickness)
         else:
             ice_thickness = fudge_factor / (0.32*args.ice_thickness + 20.45)
-
-        fname = os.path.splitext(os.path.basename(fname))[0]
+        ice_thickness_printout = (fudge_factor - 20.45*ice_thickness)/(0.32*ice_thickness)
 
         # Set `num_particles` based on the user input (args.num_particles) with the following rules:
         # 1. If the user provides a value for `args.num_particles` and it is less than or equal to the `max_num_particles`, use it.
@@ -2076,6 +2076,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         # 3. If the user's provided value exceeds `max_num_particles`, use `max_num_particles` instead.
         # 4. If the user specifies 'max', use max_num_particles, otherwise apply the existing conditions
         print_and_log(f"Trimming the mrc...", logging.INFO)
+        fname = os.path.splitext(os.path.basename(fname))[0]
         rand_num_particles, max_num_particles = trim_vol_return_rand_particle_number(f"{structure_name}.mrc", f"{args.image_directory}/{fname}.mrc", args.scale_percent, f"{structure_name}.mrc")
         num_particles = (max_num_particles if str(args.num_particles).lower() == 'max' else
                  args.num_particles if args.num_particles and isinstance(args.num_particles, int) and args.num_particles <= max_num_particles else
@@ -2085,7 +2086,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         if args.num_particles:
             print_and_log(f"Attempting to add {int(num_particles)} particles to the micrograph...", logging.INFO)
         else:
-            print_and_log("Choosing a random number of particles to attempt to add to the micrograph...", logging.INFO)
+            print_and_log("Choosing a random number of particles to add to the micrograph...", logging.INFO)
 
         # Set the particle distribution type. If none is given (default), then 'micrograph' is used
         non_random_distributions = {'micrograph', 'gaussian', 'circular', 'inverse_circular'}
@@ -2139,7 +2140,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
         print_and_log(output, logging.INFO)
-        print_and_log(f"Adding simulated noise to the particles by simulating {args.num_simulated_particle_frames} frames by sampling pixel values in each particle projection from a Poisson distribution...", logging.INFO)
+        print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
         noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus)
@@ -2153,7 +2154,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative average ice thickness of {args.ice_thickness:.1f} nm...", logging.INFO)
+        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative average ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
@@ -2261,7 +2262,7 @@ def main():
     total_number_of_particles_projected = 0
     total_number_of_particles_with_saved_coordinates = 0
     total_cropped_particles = 0
-    with ProcessPoolExecutor(max_workers=args.parallel_processes) as executor:
+    with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
         # Prepare a list of tasks
         tasks = []
         for structure_index, structure_input in enumerate(args.structures):
@@ -2293,17 +2294,17 @@ def main():
     print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if args.crop_particles else ""), logging.WARNING)
     print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
-    print_and_log("One .star file per structure can be found in the run directories.\n", logging.WARNING)
+    print_and_log("One .star file per structure is located in the run directories.\n", logging.WARNING)
 
     if args.imod_coordinate_file:
         print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
         print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)\n", logging.WARNING)
 
     if args.coord_coordinate_file:
-        print_and_log("One (x y) .coord file per micrograph can be found in the run directories.\n", logging.WARNING)
+        print_and_log("One (x y) .coord file per micrograph is located in the run directories.\n", logging.WARNING)
 
     if args.crop_particles:
-        print_and_log("Extracted particles can be found in the 'Particles' folder in the run directories.\n", logging.WARNING)
+        print_and_log("Extracted particles are in the 'Particles' folder in the run directories.\n", logging.WARNING)
 
 if __name__ == "__main__":
     main()
