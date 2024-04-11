@@ -114,6 +114,32 @@ def validate_positive_float(parser, arg_name, value):
     if value is not None and value <= 0:
         parser.error(f"{arg_name} must be a positive float.")
 
+def remove_duplicates_structures(lst):
+    """
+    Removes duplicate elements from the --structures list while converting to upper case for items without file extensions.
+
+    :param list lst: The input list from which duplicates need to be removed.
+
+    :returns list: A new list with duplicate elements removed, preserving the order of the first unique structure name (case-insensitive for items without file extensions).
+    """
+    print_and_log("", logging.DEBUG)
+    seen = set()
+    clean_lst = []
+    duplicates = []
+    for item in lst:
+        if '.' in item and item.rsplit('.', 1)[1]:  # Check if item has a file extension (ie. PDB or EMDB entry)
+            normalized_item = item
+        else:
+            normalized_item = item.upper()
+        if normalized_item in seen:
+            duplicates.append(item)
+        else:
+            seen.add(normalized_item)
+            clean_lst.append(item)
+    if duplicates:
+        print_and_log(f"\nRemoving duplicate {'request' if len(duplicates) == 1 else 'requests'}: {', '.join(duplicates)}\n", logging.INFO)
+    return clean_lst
+
 def parse_arguments(script_start_time):
     """
     Parses command-line arguments.
@@ -212,6 +238,9 @@ def parse_arguments(script_start_time):
 
     # Setup logging based on the verbosity level
     setup_logging(script_start_time, args.verbosity)
+
+    # Remove duplicate --structures
+    args.structures = remove_duplicates_structures(args.structures)
 
     if args.crop_particles and not args.mrc:
         args.mrc = True
