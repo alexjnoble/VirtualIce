@@ -117,7 +117,7 @@ def validate_positive_float(parser, arg_name, value):
 def remove_duplicates_structures(lst):
     """
     Removes duplicate elements from the --structures list while converting to upper case for items without file extensions.
-
+    Special entries like 'r', 'rp', 're', 'rm', 'random' are not considered duplicates and can repeat.
     :param list lst: The input list from which duplicates need to be removed.
 
     :returns list: A new list with duplicate elements removed, preserving the order of the first unique structure name (case-insensitive for items without file extensions).
@@ -126,18 +126,23 @@ def remove_duplicates_structures(lst):
     seen = set()
     clean_lst = []
     duplicates = []
+    exclude_duplicates = {'R', 'RP', 'RE', 'RM', 'RANDOM'}  # Set of entries to exclude from duplicate removal
+
     for item in lst:
         if '.' in item and item.rsplit('.', 1)[1]:  # Check if item has a file extension (ie. PDB or EMDB entry)
             normalized_item = item
         else:
             normalized_item = item.upper()
-        if normalized_item in seen:
+
+        if normalized_item in seen and normalized_item not in exclude_duplicates:
             duplicates.append(item)
         else:
             seen.add(normalized_item)
             clean_lst.append(item)
+
     if duplicates:
         print_and_log(f"\nRemoving duplicate {'request' if len(duplicates) == 1 else 'requests'}: {', '.join(duplicates)}\n", logging.INFO)
+
     return clean_lst
 
 def parse_arguments(script_start_time):
@@ -232,6 +237,9 @@ def parse_arguments(script_start_time):
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
 
     args = parser.parse_args()
+
+    # Set script start time variable
+    args.script_start_time = script_start_time
 
     # Set verbosity level
     args.verbosity = 0 if args.quiet else args.verbosity
@@ -2254,7 +2262,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         shutil.move(f"{structure_name}.star", f"{structure_name}/")
 
     # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
-    with open("info.txt", "a") as f:
+    with open(f"virtualice_{args.script_start_time}_info.txt", "a") as f:
         # Check if the file is empty
         if f.tell() == 0:  # Only write the first line if the file is new
             f.write("structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
