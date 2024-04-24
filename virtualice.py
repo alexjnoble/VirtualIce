@@ -688,6 +688,8 @@ def threshold_mrc_file(input_file_path, std_devs_above_mean):
     :param str input_file_path: Path to the input MRC file.
     :param float std_devs_above_mean: Number of standard deviations above the mean for thresholding.
     :param str output_file_path: Path to the output MRC file. If None, overwrite the input file.
+
+    This function modifies the input_file_path .mrc.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(input_file_path, mode='r+') as mrc:
@@ -704,6 +706,8 @@ def scale_mrc_file(input_mrc_path, pixelsize):
 
     :param str input_mrc_path: Path to the input MRC file.
     :param float pixelsize: The desired pixel size in Angstroms.
+
+    This function modifies the input_mrc_path .mrc.
     """
     print_and_log("", logging.DEBUG)
     # Read the current voxel size
@@ -722,12 +726,12 @@ def scale_mrc_file(input_mrc_path, pixelsize):
     # Construct the e2proc3d.py command for scaling. Using a temp file because otherwise the mrc filesize and header don't match, causing a warning from mrcfile during thresholding
     if scale_factor < 1:
         command = ["e2proc3d.py",
-            input_mrc_path, f"temp_scale_{input_mrc_path}",
+            input_mrc_path, input_mrc_path,
             "--scale={}".format(scale_factor),
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z)]
     elif scale_factor > 1:
         command = ["e2proc3d.py",
-            input_mrc_path, f"temp_scale_{input_mrc_path}",
+            input_mrc_path, input_mrc_path,
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z),
             "--scale={}".format(scale_factor)]
     else:  # scale_factor == 1:
@@ -735,7 +739,6 @@ def scale_mrc_file(input_mrc_path, pixelsize):
 
     try:
         output = subprocess.run(command, capture_output=True, text=True, check=True)
-        os.system(f"mv temp_scale_{input_mrc_path} {input_mrc_path}")
         print_and_log(output, logging.INFO)
     except subprocess.CalledProcessError as e:
         print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
@@ -749,6 +752,8 @@ def convert_pdb_to_mrc(pdb_name, apix, res):
     :param int res: The resolution to be used in the conversion.
 
     :return int: The mass extracted from the e2pdb2mrc.py script output.
+
+    This function writes a .pdb file to the disk.
     """
     print_and_log("", logging.DEBUG)
     print_and_log(f"Converting PDB {pdb_name} to MRC using EMAN2's e2pdb2mrc.py...", logging.INFO)
@@ -854,6 +859,8 @@ def convert_point_to_model(point_file, output_file):
 
     :param str point_file: Path to the input .point file.
     :param str output_file: Output file path for the .mod file.
+
+    This function writes a .mod file to the output_file path.
     """
     print_and_log("", logging.DEBUG)
     try:
@@ -872,7 +879,7 @@ def write_mod_file(coordinates, output_file):
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .mod file.
 
-    This function converts the particle coordinates in a .point file to an IMOD .mod file and saves it to output_file.
+    This function converts the particle coordinates in a .point file to an IMOD .mod file and writes it to output_file.
     """
     print_and_log("", logging.DEBUG)
     # Step 1: Write the .point file
@@ -890,6 +897,8 @@ def write_coord_file(coordinates, output_file):
 
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .coord file.
+
+    This function writes a .coord to the output_file path.
     """
     print_and_log("", logging.DEBUG)
     coord_file = os.path.splitext(output_file)[0] + ".coord"
@@ -906,6 +915,8 @@ def save_particle_coordinates(structure_name, particle_locations, output_path, i
     :param Namespace args: Command-line arguments containing user preferences for file outputs.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+
+    This function writes a .star file and optionally a .mod and .coord file.
     """
     print_and_log("", logging.DEBUG)
     # Save .star file
@@ -1142,6 +1153,8 @@ def downsample_micrograph(image_path, downsample_factor):
 
     :param str image_path: Path to the micrograph image file.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
+
+    This function writes a .mrc/.png/.jpeg file to the disk.
     """
     print_and_log("", logging.DEBUG)
     try:
@@ -1205,6 +1218,8 @@ def downsample_star_file(input_star, output_star, downsample_factor):
     :param str input_star: Path to the input STAR file.
     :param str output_star: Path to the output STAR file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
+
+    This function writes a .star file to the disk.
     """
     print_and_log("", logging.DEBUG)
     with open(input_star, 'r') as infile, open(output_star, 'w') as outfile:
@@ -1234,6 +1249,8 @@ def downsample_point_file(input_point, output_point, downsample_factor):
     :param str input_point: Path to the input .point file.
     :param str output_point: Path to the output .point file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
+
+    This function writes a .point file to the disk.
     """
     print_and_log("", logging.DEBUG)
     with open(input_point, 'r') as infile, open(output_point, 'w') as outfile:
@@ -1255,6 +1272,8 @@ def downsample_coord_file(input_coord, output_coord, downsample_factor):
     :param str input_coord: Path to the input .coord file.
     :param str output_coord: Path to the output .coord file.
     :param int downsample_factor: Factor by which to downsample the coordinates.
+
+    This function writes a .coord file to the disk.
     """
     print_and_log("", logging.DEBUG)
     with open(input_coord, 'r') as infile, open(output_coord, 'w') as outfile:
@@ -1338,6 +1357,8 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
     :param float scale_percent: The percentage to scale the volume for trimming.
     :param str output_mrc: The file path to save the trimmed volume.
     :return int: A random number of particles up to a maximum of how many will fit in the micrograph.
+
+    This function writes a trimmed .mrc file to the disk.
     """
     print_and_log("", logging.DEBUG)
     mrc_array = readmrc(input_mrc)
@@ -1894,6 +1915,8 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
     :param int jpeg_quality: Quality of the JPEG image.
     :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
+
+    This function writes a .mrc/.png/.jpeg file to the disk.
     """
     print_and_log("", logging.DEBUG)
     # Extract input options
@@ -1985,6 +2008,8 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     :param DataFrame particle_rows: DataFrame rows of particles to be cropped from the micrograph.
     :param str particles_dir: Directory to save cropped particles.
     :param int box_size: The box size in pixels for the cropped particles.
+
+    This function writes .mrc files to the disk.
     """
     print_and_log("", logging.DEBUG)
     cropped_count = 0
@@ -2064,6 +2089,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
 
     :return int int: The total number of particles actually added to all of the micrographs, and the box size of the projected volume.
+
+    This function writes .hdf, .mrc, and .txt files to the disk and deletes several files during cleanup.
     """
     print_and_log("", logging.DEBUG)
     # Convert short distribution to full distribution name
