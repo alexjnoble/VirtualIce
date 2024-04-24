@@ -92,6 +92,7 @@ def validate_positive_int(parser, arg_name, value):
     """
     Validates if a given value is a positive integer.
 
+    :param argparse.ArgumentParser parser: The argparse parser object.
     :param str arg_name: The name of the argument being validated.
     :param int value: The value to be validated.
 
@@ -105,6 +106,7 @@ def validate_positive_float(parser, arg_name, value):
     """
     Validates if a given value is a positive float.
 
+    :param argparse.ArgumentParser parser: The argparse parser object.
     :param str arg_name: The name of the argument being validated.
     :param int value: The value to be validated.
 
@@ -118,6 +120,7 @@ def remove_duplicates_structures(lst):
     """
     Removes duplicate elements from the --structures list while converting to upper case for items without file extensions.
     Special entries like 'r', 'rp', 're', 'rm', 'random' are not considered duplicates and can repeat.
+
     :param list lst: The input list from which duplicates need to be removed.
 
     :returns list: A new list with duplicate elements removed, preserving the order of the first unique structure name (case-insensitive for items without file extensions).
@@ -149,6 +152,7 @@ def parse_arguments(script_start_time):
     """
     Parses command-line arguments.
 
+    :param str script_start_time: Function start time, formatted as a string
     :returns argparse.Namespace: An object containing attributes for each command-line argument.
     """
     parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons at junk/substrate locations are projected but not written to coordinate files.",
@@ -356,6 +360,8 @@ def print_and_log(message, level=logging.INFO):
 
     If verbosity is set to 3, the function logs additional details about the caller,
     including module name, function name, line number, and function parameters.
+
+    This function writes logging information to the disk.
     """
     logger = logging.getLogger()
 
@@ -458,6 +464,8 @@ def download_pdb(pdb_id, suppress_errors=False):
     :param str pdb_id: The ID of the PDB to be downloaded.
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return bool: True if the PDB exists, False if it doesn't.
+
+    This function writes a .pdb file to the disk.
     """
     print_and_log("", logging.DEBUG)
     if not suppress_errors:
@@ -505,6 +513,8 @@ def download_emdb(emdb_id, suppress_errors=False):
     :param str emdb_id: The ID of the EMDB map to be downloaded.
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return bool: True if the map exists and is downloaded, False if not.
+
+    This function writes a .map.gz file to the disk, then unzips the .map file and removes the .map.gz file.
     """
     print_and_log("", logging.DEBUG)
     url = f"https://files.wwpdb.org/pub/emdb/structures/EMD-{emdb_id}/map/emd_{emdb_id}.map.gz"
@@ -629,11 +639,12 @@ def normalize_and_convert_mrc(input_file):
     :param str input_file: Path to the input MRC or MAP file.
     :returns str: The base name of the output MRC file, without the '.mrc' extension, or None if an error occurred.
 
+    This function modifies input_file if it's an .mrc file or writes an .mrc file and modifies it if input_file is a .map file.
+
     Note:
-    - The function attempts to remove the original input file if it's different from the output file to avoid duplication.
-    - A temporary file ('temp_normalized.mrc') is used during processing for normalization.
     - If the input file is not a cube (i.e., all dimensions are not equal), the function calculates the padding needed to center the volume within a cubic volume whose dimension is equal to the maximum dimension of the original volume.
     - The volume is padded with the average value found in the original data, ensuring that added regions do not introduce artificial density.
+    - The function attempts to remove the original input file if it's different from the output file to avoid duplication.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(input_file, mode='r') as mrc:
@@ -644,33 +655,27 @@ def normalize_and_convert_mrc(input_file):
     padding = [(max_dim - dim) // 2 for dim in dims]
     pad_width = [(pad, max_dim - dim - pad) for pad, dim in zip(padding, dims)]
 
+    # Determine the output file name
     output_file = input_file if input_file.endswith('.mrc') else input_file.rsplit('.', 1)[0] + '.mrc'
-
-    # Temporary file for normalized volume
-    normalized_file = "temp_normalized.mrc"
 
     try:
         # Normalize the volume
-        output = subprocess.run(["e2proc3d.py", input_file, normalized_file, "--outtype=mrc", "--process=normalize.edgemean"], capture_output=True, text=True, check=True)
-        print_and_log(output, logging.INFO)
+        output = subprocess.run(["e2proc3d.py", input_file, output_file, "--outtype=mrc", "--process=normalize.edgemean"], capture_output=True, text=True, check=True)
+        print_and_log(output.stdout, logging.INFO)
 
         # Read the normalized volume, pad it, and save to the output file
-        with mrcfile.open(normalized_file, mode='r+') as mrc:
+        with mrcfile.open(output_file, mode='r+') as mrc:
             data_padded = np.pad(mrc.data, pad_width, mode='constant', constant_values=np.mean(mrc.data))
             mrc.set_data(data_padded)
             mrc.update_header_from_data()
             mrc.close()
 
-        # Move the padded, normalized file to the desired output file location
-        if normalized_file != output_file:
-            os.rename(normalized_file, output_file)
-
-        # Remove the original .map file if it's different from the output file
+        # Remove the original input file if it's different from the output file
         if input_file != output_file and os.path.exists(input_file):
             os.remove(input_file)
+
     except subprocess.CalledProcessError as e:
-        if os.path.exists(normalized_file):
-            os.remove(normalized_file)
+        print_and_log(f"Error: {e.stderr}", logging.ERROR)
         return None
 
     return output_file.rsplit('.', 1)[0]
@@ -693,7 +698,7 @@ def threshold_mrc_file(input_file_path, std_devs_above_mean):
         data[data < threshold] = 0  # Set values below threshold to zero
         mrc.set_data(data)  # Update the MRC file with thresholded data
 
-def scale_mrc_file(input_file, pixelsize):
+def scale_mrc_file(input_mrc_path, pixelsize):
     """
     Scale an MRC file to a specified pixel size, allowing both upscaling and downscaling.
 
@@ -702,7 +707,7 @@ def scale_mrc_file(input_file, pixelsize):
     """
     print_and_log("", logging.DEBUG)
     # Read the current voxel size
-    with mrcfile.open(input_file, mode='r') as mrc:
+    with mrcfile.open(input_mrc_path, mode='r') as mrc:
         original_voxel_size = mrc.voxel_size.x  # Assuming cubic voxels for simplicity
         original_shape = mrc.data.shape
 
@@ -717,12 +722,12 @@ def scale_mrc_file(input_file, pixelsize):
     # Construct the e2proc3d.py command for scaling. Using a temp file because otherwise the mrc filesize and header don't match, causing a warning from mrcfile during thresholding
     if scale_factor < 1:
         command = ["e2proc3d.py",
-            input_file, f"temp_scale_{input_file}",
+            input_mrc_path, f"temp_scale_{input_mrc_path}",
             "--scale={}".format(scale_factor),
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z)]
     elif scale_factor > 1:
         command = ["e2proc3d.py",
-            input_file, f"temp_scale_{input_file}",
+            input_mrc_path, f"temp_scale_{input_mrc_path}",
             "--clip={},{},{}".format(scaled_dimension_x, scaled_dimension_y, scaled_dimension_z),
             "--scale={}".format(scale_factor)]
     else:  # scale_factor == 1:
@@ -730,7 +735,7 @@ def scale_mrc_file(input_file, pixelsize):
 
     try:
         output = subprocess.run(command, capture_output=True, text=True, check=True)
-        os.system(f"mv temp_scale_{input_file} {input_file}")
+        os.system(f"mv temp_scale_{input_mrc_path} {input_mrc_path}")
         print_and_log(output, logging.INFO)
     except subprocess.CalledProcessError as e:
         print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
@@ -778,8 +783,10 @@ def writemrc(mrc_path, numpy_array):
     """
     Write a NumPy array as an MRC file.
 
-    :param strmrc_path: The file path of the MRC file to write.
+    :param str mrc_path: The file path of the MRC file to write.
     :param numpy_array: The NumPy array to be written.
+
+    This function writes the numpy_array to the specified mrc_path.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.new(mrc_path, overwrite=True) as mrc:
@@ -795,6 +802,8 @@ def write_star_header(file_basename, apix, voltage, cs):
     :param float apix: The pixel size used in the conversion.
     :param float voltage: The voltage used in the conversion.
     :param float cs: The spherical aberration used in the conversion.
+
+    This function writes the header information for a .star file to the disk with the specified parameters.
     """
     print_and_log("", logging.DEBUG)
     with open(f'{file_basename}.star', 'w') as star_file:
@@ -829,6 +838,8 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
     :param str structure_name: The name of the structure file.
     :param str image_path: The path of the image to add.
     :param list_of_tuples particle_locations: A list of tuples, where each tuple contains the x, y coordinates.
+
+    This function appends particle locations to a .star file on the disk, along with the specified structure_name and image_path.
     """
     print_and_log("", logging.DEBUG)
     # Open the star file once and write all coordinates
@@ -860,6 +871,8 @@ def write_mod_file(coordinates, output_file):
 
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .mod file.
+
+    This function converts the particle coordinates in a .point file to an IMOD .mod file and saves it to output_file.
     """
     print_and_log("", logging.DEBUG)
     # Step 1: Write the .point file
@@ -891,8 +904,8 @@ def save_particle_coordinates(structure_name, particle_locations, output_path, i
     :param str structure_name: Base name for the output files.
     :param list particle_locations: List of particle locations as (x, y) tuples.
     :param Namespace args: Command-line arguments containing user preferences for file outputs.
-    :param str prefix: Optional prefix for file names.
-    :param str suffix: Optional suffix for file names, e.g., for handling repeats.
+    :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
     """
     print_and_log("", logging.DEBUG)
     # Save .star file
@@ -1588,6 +1601,7 @@ def estimate_noise_parameters(mrc_path):
     :param mrc_path: Path to the MRC file.
     :return float, float: A tuple containing the estimated Poisson variance (mean) and Gaussian variance.
     """
+    print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_path, mode='r') as mrc:
         image = mrc.data.astype(np.float32)
 
@@ -1725,6 +1739,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
 
+    The input options include these parameters:
     :param numpy_array large_image: The large image where small images will be blended into.
     :param numpy_array small_images: The list of small images or particles to be blended.
     :param float scale_percent: The percentage to scale the volume for trimming.
@@ -1745,7 +1760,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
     :param int polygon_expansion_distance: Distance by which to expand the polygons.
     :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
-    :return numpy_array: The blended large image.
+    :return numpy_array list_of_tuples: The blended large image, and the filtered particle locations.
     """
     print_and_log("", logging.DEBUG)
     # Extract input options
@@ -1854,6 +1869,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
+    The input options include these parameters:
     :param str large_image_path: The file path of the large image or micrograph.
     :param str small_images: The file path of the small images or particles.
     :param float scale_percent: The percentage to scale the volume for trimming.
@@ -2005,6 +2021,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
       convention '{structure_name}.star' containing the necessary coordinates for cropping.
     """
     print_and_log("", logging.DEBUG)
+    print_and_log(f"\nCropping particles for {structure_dir}...\n", logging.INFO)
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
@@ -2287,7 +2304,46 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
     return total_num_particles_projected, total_num_particles_with_saved_coordinates, box_size
 
+def print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
+                          total_number_of_particles_with_saved_coordinates, total_cropped_particles, crop_particles,
+                          imod_coordinate_file, coord_coordinate_file):
+    """
+    Print run information based on the provided input variables.
+
+    :param int num_micrographs: The number of micrographs.
+    :param int total_structures: The total number of structures.
+    :param str time_str: The string representation of the total generation time.
+    :param int total_number_of_particles_projected: The total number of particles projected.
+    :param int total_number_of_particles_with_saved_coordinates: The total number of particles saved to coordinate files.
+    :param int total_cropped_particles: The total number of cropped particles.
+    :param bool crop_particles: Whether or not particles were cropped.
+    :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    """
+    print_and_log("", logging.DEBUG)
+    print_and_log("\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
+    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if crop_particles else ""), logging.WARNING)
+    print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
+
+    print_and_log("One .star file per structure is located in the run directories.\n", logging.WARNING)
+
+    if imod_coordinate_file:
+        print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
+        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)\n", logging.WARNING)
+
+    if coord_coordinate_file:
+        print_and_log("One (x y) .coord file per micrograph is located in the run directories.\n", logging.WARNING)
+
+    if crop_particles:
+        print_and_log("Extracted particles are in the 'Particles' folder in the run directories.\n", logging.WARNING)
+
 def main():
+    """
+    Main function. Loops over all structures and calls generate_micrographs for each structure,
+    then optionally crops each particle from each micrograph, then prints the run time and file
+    output information.
+    """
     start_time = time.time()
     start_time_formatted = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(start_time))
 
@@ -2326,22 +2382,10 @@ def main():
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.structures)
-    print_and_log("\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
-    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if args.crop_particles else ""), logging.WARNING)
-    print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
-    print_and_log("One .star file per structure is located in the run directories.\n", logging.WARNING)
-
-    if args.imod_coordinate_file:
-        print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
-        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)\n", logging.WARNING)
-
-    if args.coord_coordinate_file:
-        print_and_log("One (x y) .coord file per micrograph is located in the run directories.\n", logging.WARNING)
-
-    if args.crop_particles:
-        print_and_log("Extracted particles are in the 'Particles' folder in the run directories.\n", logging.WARNING)
+    print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
+                          total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
+                          args.imod_coordinate_file, args.coord_coordinate_file)
 
 if __name__ == "__main__":
     main()
