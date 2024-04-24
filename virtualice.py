@@ -2404,7 +2404,7 @@ def main():
             # Check if cropping is enabled and perform cropping
             if args.crop_particles:
                 box_size = args.box_size if args.box_size is not None else box_size
-                total_cropped_particles = crop_particles_from_micrographs(structure_name, box_size, args.cpus)
+                total_cropped_particles += crop_particles_from_micrographs(structure_name, box_size, args.cpus)
 
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
