@@ -170,7 +170,7 @@ def parse_arguments(script_start_time):
 
     # Input Options
     input_group = parser.add_argument_group('Input Options')
-    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '11638', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
+    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
     input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
 
@@ -248,6 +248,20 @@ def parse_arguments(script_start_time):
     # Set verbosity level
     args.verbosity = 0 if args.quiet else args.verbosity
 
+    # Make local paths absolute
+    args.image_list_file = os.path.abspath(args.image_list_file)
+    args.image_directory = os.path.abspath(args.image_directory)
+
+    # Determine output directory
+    if not args.output_directory:
+        # Create a unique directory name using the date and time that the script was run
+        args.output_directory = f"VirtualIce_run_{script_start_time}"
+
+    # Create the output directory if it doesn't exist and move to it
+    if not os.path.exists(args.output_directory):
+        os.makedirs(args.output_directory)
+    os.chdir(args.output_directory)
+
     # Setup logging based on the verbosity level
     setup_logging(script_start_time, args.verbosity)
 
@@ -280,15 +294,6 @@ def parse_arguments(script_start_time):
 
     if args.jpeg_quality < 0:
         parser.error("--jpeg_quality must be an integer.")
-
-    # Determine output directory
-    if not args.output_directory:
-        # Create a unique directory name using the date and time that the script was run
-        args.output_directory = f"VirtualIce_run_{script_start_time}"
-
-    # Create the output directory if it doesn't exist
-    #if not os.path.exists(args.output_directory):
-    #    os.makedirs(args.output_directory)
 
     # Print all arguments for the user's information
     formatted_output = ""
