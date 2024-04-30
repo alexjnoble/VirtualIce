@@ -2055,7 +2055,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
-    star_file_path = os.path.join(structure_dir, f'{structure_dir}.star')
+    star_file_path = os.path.join(f'{structure_dir}.star')
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
 
@@ -2090,8 +2090,11 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     and iterates through the generation process for each selected image. It also
     handles cleanup operations post-generation.
 
-    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
     :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
+    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
+    :param str structure_type: Whether the structure is a pdb or mrc.
+    :param str structure_index: The index of the structure that micrographs are being generated from.
+    :param str total_structures: The total number of structures requested.
 
     :return int int: The total number of particles actually added to all of the micrographs, and the box size of the projected volume.
 
@@ -2285,7 +2288,30 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         # Downsample coordinate files
         downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
+    else:
+        shutil.move(f"{structure_name}.star", f"{structure_name}/")
 
+    # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
+    with open(f"virtualice_{args.script_start_time}_info.txt", "a") as f:
+        # Check if the file is empty
+        if f.tell() == 0:  # Only write the first line if the file is new
+            f.write("structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
+
+        # Write the subsequent lines
+        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
+
+    box_size = get_mrc_box_size(f"{structure_name}.mrc")
+
+    return total_num_particles_projected, total_num_particles_with_saved_coordinates, box_size
+
+def clean_up(args, structure_name):
+    """
+    Clean up files at the end of the script.
+
+    :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
+    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
+    """
+    if args.binning > 1:
         if not args.keep:
             print_and_log("Removing non-downsamlpled micrographs...", logging.INFO)
             bin_dir = f"{structure_name}/bin_{args.binning}/"
@@ -2307,21 +2333,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         else:
             shutil.move(f"{structure_name}.star", f"{structure_name}/")
             shutil.move(f"{structure_name}_bin{args.binning}.star", f"{structure_name}/bin_{args.binning}/")
-    else:
-        shutil.move(f"{structure_name}.star", f"{structure_name}/")
 
-    # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
-    with open(f"virtualice_{args.script_start_time}_info.txt", "a") as f:
-        # Check if the file is empty
-        if f.tell() == 0:  # Only write the first line if the file is new
-            f.write("structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
-
-        # Write the subsequent lines
-        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
-
-    box_size = get_mrc_box_size(f"{structure_name}.mrc")
-
-    # Cleanup
     for directory in [f"{structure_name}/", f"{structure_name}/bin_{args.binning}/"]:
         try:
             for file_name in os.listdir(directory):
@@ -2330,15 +2342,14 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
                     os.remove(file_path)
         except FileNotFoundError:
             pass
+
     for temp_file in [f"{structure_name}.pdb", f"{structure_name}.map", f"{structure_name}.mrc", "thread.out", ".eman2log.txt"]:
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-    return total_num_particles_projected, total_num_particles_with_saved_coordinates, box_size
-
 def print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, crop_particles,
-                          imod_coordinate_file, coord_coordinate_file):
+                          imod_coordinate_file, coord_coordinate_file, output_directory):
     """
     Print run information based on the provided input variables.
 
@@ -2351,11 +2362,13 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     :param bool crop_particles: Whether or not particles were cropped.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    :param str output_directory: Output directory for all run files.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log("\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log("\n\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
     print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
     print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if crop_particles else ""), logging.WARNING)
+    print_and_log(f"Run directory: {output_directory}", logging.WARNING)
     print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
     print_and_log("One .star file per structure is located in the run directories.\n", logging.WARNING)
@@ -2411,13 +2424,15 @@ def main():
                 box_size = args.box_size if args.box_size is not None else box_size
                 total_cropped_particles += crop_particles_from_micrographs(structure_name, box_size, args.cpus)
 
+            clean_up(args, structure_name)
+
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
     num_micrographs = args.num_images * len(args.structures)
 
     print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
-                          args.imod_coordinate_file, args.coord_coordinate_file)
+                          args.imod_coordinate_file, args.coord_coordinate_file, args.output_directory)
 
 if __name__ == "__main__":
     main()
