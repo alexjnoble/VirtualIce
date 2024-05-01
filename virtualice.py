@@ -2075,7 +2075,6 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
             future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size)
             futures.append(future)
 
-        # Optional: Wait for all futures to complete if you need to process results further
         for future in futures:
             total_cropped += future.result()
 
@@ -2366,22 +2365,20 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     """
     print_and_log("", logging.DEBUG)
     print_and_log("\n\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Total generation time for {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
+    print_and_log(f"Time to generate {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
     print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if crop_particles else ""), logging.WARNING)
-    print_and_log(f"Run directory: {output_directory}", logging.WARNING)
-    print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
+    print_and_log(f"Run directory: {output_directory}/" + (f"; Crop directory: [structure_name(s)]/Particles/\n" if crop_particles else "\n"), logging.WARNING)
 
-    print_and_log("One .star file per structure is located in the run directories.\n", logging.WARNING)
-
-    if imod_coordinate_file:
-        print_and_log("To open a micrograph with an IMOD coordinate file, run a command of this form:", logging.WARNING)
-        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)\n", logging.WARNING)
+    print_and_log("One .star file per structure is located in the structure directories.", logging.WARNING)
 
     if coord_coordinate_file:
-        print_and_log("One (x y) .coord file per micrograph is located in the run directories.\n", logging.WARNING)
+        print_and_log("One (x y) .coord file per micrograph is located in the structure directories.", logging.WARNING)
 
-    if crop_particles:
-        print_and_log("Extracted particles are in the 'Particles' folder in the run directories.\n", logging.WARNING)
+    if imod_coordinate_file:
+        print_and_log("One IMOD .mod file per micrograph is located in the structure directories.", logging.WARNING)
+        print_and_log("To open a micrograph with an IMOD .mod file, run a command of this form:", logging.WARNING)
+        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)", logging.WARNING)
+    print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
 def main():
     """
