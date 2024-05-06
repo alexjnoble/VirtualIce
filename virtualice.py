@@ -8,20 +8,17 @@
 # noise micrographs and their corresponding defoci. It is intended that the noise micrographs
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
-# Dependencies: EMAN2 installation (specifically e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
+# Dependencies: EMAN2 installation (namely e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
 #               pip install mrcfile numpy scipy cv2 SimpleITK
 #
-# This program depends on EMAN2 to function properly. Users must separately
-# install EMAN2 to use this program.
+# This program requires a separate installation of EMAN2 for proper functionality.
 #
 # EMAN2 is distributed under BSD-3-Clause and GPL-2.0 licenses. For details, see:
 # - BSD-3-Clause: https://opensource.org/licenses/BSD-3-Clause
 # - GPL-2.0: https://opensource.org/licenses/GPL-2.0
-#
 # EMAN2 source code: https://github.com/cryoem/eman2
 #
 # IMOD (separate install; GPL-2.0 license) is optional to output IMOD coordinate files.
-#
 # IMOD source code and packages: https://bio3d.colorado.edu/imod/
 #
 # Ensure compliance with EMAN2's and IMOD's license terms when obtaining and using them.
@@ -84,9 +81,12 @@ def check_binning(value):
     :raises ArgumentTypeError: If the value is not in the allowed range.
     """
     ivalue = int(value)
-    if ivalue < 2 or ivalue >= 64:
-        raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
-    return ivalue
+    try:
+        if ivalue < 2 or ivalue >= 64:
+            raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
+        return ivalue
+    except ValueError:
+        raise argparse.ArgumentTypeError("Binning must be an integer between 2 and 64")
 
 def validate_positive_int(parser, arg_name, value):
     """
@@ -99,8 +99,11 @@ def validate_positive_int(parser, arg_name, value):
     :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
     """
     print_and_log("", logging.DEBUG)
-    if value is not None and value <= 0:
-        parser.error(f"{arg_name} must be a positive integer.")
+    try:
+        if value is not None and value <= 0:
+            parser.error(f"{arg_name} must be a positive integer.")
+    except ValueError:
+        raise argparse.ArgumentTypeError("{arg_name} must be a positive integer.")
 
 def validate_positive_float(parser, arg_name, value):
     """
@@ -113,8 +116,11 @@ def validate_positive_float(parser, arg_name, value):
     :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
     """
     print_and_log("", logging.DEBUG)
-    if value is not None and value <= 0:
-        parser.error(f"{arg_name} must be a positive float.")
+    try:
+        if value is not None and value <= 0:
+            parser.error(f"{arg_name} must be a positive float.")
+    except ValueError:
+        raise argparse.ArgumentTypeError("{arg_name} must be a positive float.")
 
 def remove_duplicates_structures(lst):
     """
@@ -2309,6 +2315,8 @@ def clean_up(args, structure_name):
 
     :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
     :param str structure_name: The structure name from which synthetic micrographs are to be generated.
+
+    This function deletes several files.
     """
     if args.binning > 1:
         if not args.keep:
@@ -2365,9 +2373,9 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     """
     print_and_log("", logging.DEBUG)
     print_and_log("\n\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Time to generate {num_micrographs} micrograph{'s' if num_micrographs != 1 else ''} from {total_structures} structure{'s' if total_structures != 1 else ''} (particle counts below): {time_str}", logging.WARNING)
-    print_and_log(f"Total particles projected: {total_number_of_particles_projected}; Total particles saved to coordinate files: {total_number_of_particles_with_saved_coordinates}" + (f"; Total particles cropped: {total_cropped_particles}" if crop_particles else ""), logging.WARNING)
-    print_and_log(f"Run directory: {output_directory}/" + (f"; Crop directory: [structure_name(s)]/Particles/\n" if crop_particles else "\n"), logging.WARNING)
+    print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} from \033[1m{total_structures}\033[0m structure{'s' if total_structures != 1 else ''} (particle counts below): \033[1m{time_str}\033[0m", logging.WARNING)
+    print_and_log(f"Total particles projected: \033[1m{total_number_of_particles_projected}\033[0m | Total particles saved to coordinate files: \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m" + (f" | Total particles cropped: \033[1m{total_cropped_particles}\033[0m" if crop_particles else ""), logging.WARNING)
+    print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m" + (f" | Crop directory: \033[1m[structure_name(s)]/Particles/\033[0m\n" if crop_particles else "\n"), logging.WARNING)
 
     print_and_log("One .star file per structure is located in the structure directories.", logging.WARNING)
 
@@ -2377,7 +2385,7 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     if imod_coordinate_file:
         print_and_log("One IMOD .mod file per micrograph is located in the structure directories.", logging.WARNING)
         print_and_log("To open a micrograph with an IMOD .mod file, run a command of this form:", logging.WARNING)
-        print_and_log("3dmod image.mrc image.mod (Replace 'image.mrc' and 'image.mod' with your files)", logging.WARNING)
+        print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace 'image.mrc' and 'image.mod' with your files)", logging.WARNING)
     print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
 def main():
@@ -2423,9 +2431,9 @@ def main():
 
             clean_up(args, structure_name)
 
+    num_micrographs = args.num_images * len(args.structures)
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
-    num_micrographs = args.num_images * len(args.structures)
 
     print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
