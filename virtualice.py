@@ -2372,9 +2372,11 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     :param str output_directory: Output directory for all run files.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log("\n\n----------------------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} from \033[1m{total_structures}\033[0m structure{'s' if total_structures != 1 else ''} (particle counts below): \033[1m{time_str}\033[0m", logging.WARNING)
-    print_and_log(f"Total particles projected: \033[1m{total_number_of_particles_projected}\033[0m | Total particles saved to coordinate files: \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m" + (f" | Total particles cropped: \033[1m{total_cropped_particles}\033[0m" if crop_particles else ""), logging.WARNING)
+    print_and_log("\n\n-----------------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log("                  \033[1mVirtualIce Generation Summary\033[0m", logging.WARNING)
+    print_and_log("-----------------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} from \033[1m{total_structures}\033[0m structure{'s' if total_structures != 1 else ''}: \033[1m{time_str}\033[0m", logging.WARNING)
+    print_and_log(f"A total of: \033[1m{total_number_of_particles_projected}\033[0m particles projected, \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m saved to coordinate files" + (f", \033[1m{total_cropped_particles}\033[0m particles cropped" if crop_particles else ""), logging.WARNING)
     print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m" + (f" | Crop directory: \033[1m[structure_name(s)]/Particles/\033[0m\n" if crop_particles else "\n"), logging.WARNING)
 
     print_and_log("One .star file per structure is located in the structure directories.", logging.WARNING)
@@ -2386,7 +2388,7 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
         print_and_log("One IMOD .mod file per micrograph is located in the structure directories.", logging.WARNING)
         print_and_log("To open a micrograph with an IMOD .mod file, run a command of this form:", logging.WARNING)
         print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace 'image.mrc' and 'image.mod' with your files)", logging.WARNING)
-    print_and_log("----------------------------------------------------------------------------------------------------------------\n", logging.WARNING)
+    print_and_log("-----------------------------------------------------------------------------------------------------\n", logging.WARNING)
 
 def main():
     """
