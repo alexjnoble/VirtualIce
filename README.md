@@ -1,13 +1,14 @@
 # VirtualIce: Synthetic CryoEM Micrograph Generator
 
-VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects Protein Data Bank (PDB) structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
+VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects PDB, EMDB, or local structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise, dose damage, and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
 
 #### Features
 
 - Generates synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
-- Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate.
-- Adds Poisson and Gaussian noise to particles.
-- Applies Contrast Transfer Function (CTF) to simulate microscope optics.
+- Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate or too close to the edge.
+- Adds Poisson to particle frames and Gaussian noise to particles.
+- Adds dose-dependent damage to simulated frames.
+- Applies the Contrast Transfer Function (CTF) to simulate microscope optics.
 - Outputs micrographs as MRC, PNG, and JPEG output formats.
 - Multi-core processing.
 - Extensive customization options including particle distribution, ice thickness, and microscope parameters.
@@ -40,10 +41,10 @@ Generates `-n` _10_ random micrographs of PDB `-s` _1TIM_.
 Advanced example usage:
 
 ```
-./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -p 2
+./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2
 ```
 
-Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <i>n</i>on-random distribution of particles and `-p` parallelizes micrograph generation across _2_ CPUs.
+Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <i>n</i>on-random distribution of particles and `-ps` parallelizes micrograph generation across _2_ CPUs.
 
 ## Arguments
 
@@ -53,7 +54,7 @@ Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/P
 - `-Q`, `--jpeg-quality`: JPEG image quality.
 - `-b`, `--binning`: Bin micrographs by downsampling.
 - `-D`, `--distribution`: Distribution type for generating particle locations.
-- `-p`, `--parallel_processes`: Parallel processes for micrograph generation.
+- `-ps`, `--parallellize_structures`: Parallel processes for micrograph generation across the structures requested.
 
 Additional arguments exist for fine-tuning the generation process including ice thickness, junk filtering, and CTF parameters.
 
