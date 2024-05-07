@@ -184,10 +184,10 @@ def parse_arguments(script_start_time):
     particle_micrograph_group = parser.add_argument_group('Particle and Micrograph Generation Options')
     particle_micrograph_group.add_argument("-n", "--num_images", type=int, default=5, help="Number of micrographs to create for each structure requested. Default is %(default)s")
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
-    particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
+    particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size (in Angstroms) of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
     particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
-    particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise. Default is %(default)s")
+    particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise and optionally apply dose damaging. Default is %(default)s")
     particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non_random', 'm', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
@@ -198,8 +198,12 @@ def parse_arguments(script_start_time):
 
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
-    simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
-    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value)")
+    simulation_group.add_argument('--dose_damage', type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015.")
+    simulation_group.add_argument('--dose_a', type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument('--dose_b', type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument('--dose_c', type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
+    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
     simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
     simulation_group.add_argument("-ea", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
@@ -207,7 +211,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-da", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
     simulation_group.add_argument("-ph", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
     simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
-    simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 (EMAN2 e2proc2d.py option). Default is %(default)s")
+    simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
     simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
     simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
@@ -239,9 +243,9 @@ def parse_arguments(script_start_time):
 
     # System and Program Options
     misc_group = parser.add_argument_group('System and Program Options')
-    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to particle frames, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
     misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
     misc_group.add_argument("-pm", "--parallelize_micrographs", type=int, default=1, help="Number of parallel processes for generating each micrograph. Default is 1 (no parallelization)")
+    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to and dose damaging particle frames, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
     misc_group.add_argument("-V", "--verbosity", type=int, default=1, help="Set verbosity level: 0 (quiet), 1 (some output), 2 (verbose), 3 (debug). For 0-2, a log file will be additionally written with 2. For 3, a log file will be additionally written with 3. Default is %(default)s")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
@@ -301,15 +305,32 @@ def parse_arguments(script_start_time):
     if args.jpeg_quality < 0:
         parser.error("--jpeg_quality must be an integer.")
 
+    # Dose damaging preset parameter mapping
+    if args.dose_damage != 'Custom' and args.dose_damage != 'None':
+        preset_values = {
+            "Light": (0.245, -1.8, 12.01),
+            "Moderate": (0.245, -1.665, 2.81),
+            "Heavy": (0.245, -1.4, 2.01)
+        }
+        args.dose_a, args.dose_b, args.dose_c = preset_values[args.dose_damage]
+    if args.dose_damage == 'Custom':
+        if args.dose_a is None or args.dose_b is None or args.dose_c is None:
+            parser.error("--dose_a, --dose_b, and --dose_c must be provided for --dose_damage=Custom.")
+    if args.dose_damage == 'None':
+        args.dose_a = args.dose_b = args.dose_c = 0
+
     # Print all arguments for the user's information
     formatted_output = ""
     for arg, value in vars(args).items():
         formatted_output += f"{arg}: {value};\n"
+    formatted_output = formatted_output.rstrip(";\n")  # Remove the trailing semicolon
     argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
 
+    print_and_log("\n-----------------------------------------------------------------------------------------------", logging.WARNING)
+    print_and_log("                  \033[1mVirtualIce Run Configuration\033[0m", logging.WARNING)
     print_and_log("-----------------------------------------------------------------------------------------------", logging.WARNING)
     print_and_log(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
-    print_and_log("VirtualIce arguments:\n", logging.WARNING)
+    print_and_log("Input arguments:\n", logging.WARNING)
     print_and_log(argument_printout, logging.WARNING)
     print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
 
@@ -809,6 +830,33 @@ def writemrc(mrc_path, numpy_array):
         mrc.set_data(numpy_array)
 
     return
+
+def lowPassFilter(imgarray, apix=1.0, bin=1, radius=0.0):
+    """
+    Low pass filter image to radius resolution using SimpleITK for Gaussian smoothing.
+
+    The function smooths the image by applying a Gaussian filter, which is
+    controlled by the specified radius. The effective width of the Gaussian
+    filter is adjusted based on the pixel size (apix) and binning factor.
+
+    :param numpy.ndarray imgarray: The image data as a 2D or 3D numpy array.
+    :param float apix: The pixel size in Angstroms per pixel.
+    :param int bin: The binning factor applied to the image.
+    :param float radius: The desired resolution in Angstroms at which to apply the filter.
+    :return numpy.ndarray: The filtered image array. If radius is None or <= 0.0, the original image array is returned.
+    """
+    if radius is None or radius <= 0.0:
+        return imgarray
+
+    # Adjust sigma for apix and binning
+    sigma = float(radius / apix / float(bin))
+    
+    # Convert numpy array to SimpleITK image for processing, then convert back
+    sitkImage = sitk.GetImageFromArray(imgarray)
+    sitkImage = sitk.SmoothingRecursiveGaussian(sitkImage, sigma=sigma / 10.0)  # 10.0 is a fudge factor that gets dose damaging about right.
+    filtered_imgarray = sitk.GetArrayFromImage(sitkImage)
+
+    return filtered_imgarray
 
 def write_star_header(file_basename, apix, voltage, cs):
     """
@@ -1649,17 +1697,22 @@ def estimate_noise_parameters(mrc_path):
 
 def process_slice(args):
     """
-    Process a slice of the particle stack by adding Poisson noise.
+    Process a slice of the particle stack by adding Poisson noise to simulate electron counts from proteins.
+    Optionally applies dose damage to the frames.
 
     :param args: A tuple containing the following parameters:
                  - slice numpy_array: A 3D numpy array representing a slice of the particle stack.
                  - num_frames int: Number of frames to simulate for each particle image.
+                 - float dose_a: Custom value for the 'a' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float dose_b: Custom value for the 'b' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float dose_c: Custom value for the 'c' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float apix: Pixel size (in Angstroms) of the ice images.
                  - scaling_factor float: Factor by which to scale the particle images before adding noise.
     :return numpy_array: A 3D numpy array representing the processed slice of the particle stack with added noise.
     """
     print_and_log("", logging.DEBUG)
     # Unpack the arguments
-    slice, num_frames, scaling_factor = args
+    slice, num_frames, scaling_factor, dose_a, dose_b, dose_c, apix = args
 
     # Create an empty array to store the noisy slice of the particle stack
     noisy_slice = np.zeros_like(slice, dtype=np.float32)
@@ -1673,19 +1726,28 @@ def process_slice(args):
         mask = particle > 0
 
         # For each frame, simulate the noise and accumulate the result
-        for _ in range(num_frames):
+        for j in range(num_frames):
+            j += 1  # Simulates the accumulated dose per 1 e/A^2 per simulated frame
             # Initialize a frame with zeros
             noisy_frame = np.zeros_like(particle, dtype=np.float32)
 
             # Add Poisson noise to the non-zero values in the particle, modulated by the original pixel values; it represents shot noise.
             noisy_frame[mask] = np.random.poisson(particle[mask])
 
-            # Accumulate the noisy frame to the noisy slice
+            # Dose damage frames if requested
+            if not (dose_a == dose_b == dose_c == 0):  # All zero is equivalent to the user specifying None for dose_damage
+                if j != dose_c:
+                    lowpass = float(np.real(complex(dose_a/(j - dose_c))**(1/dose_b)))  # Equation (3) from Grant & Grigorieff, 2015. Assumes 1 e/A^2 per simulated frame.
+                else:  #No divide by zero
+                    lowpass = float(np.real(complex(dose_a/(j - dose_c + 0.001))**(1/dose_b)))  # Slight perturbation of the equation above
+                noisy_frame = lowPassFilter(noisy_frame, apix=apix, radius=lowpass)
+
+            # Accumulate the noisy frame into the noisy slice
             noisy_slice[i, :, :] += noisy_frame
 
     return noisy_slice
 
-def add_poisson_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0):
+def add_poisson_noise(particle_stack, num_frames, num_cores, dose_a, dose_b, dose_c, apix, scaling_factor=1.0):
     """
     Add Poisson noise to a stack of particle images.
 
@@ -1697,6 +1759,10 @@ def add_poisson_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0)
     :param numpy_array particle_stack: 3D numpy array representing a stack of 2D particle images.
     :param int num_frames: Number of frames to simulate for each particle image.
     :param int num_cores: Number of CPU cores to parallelize slices across.
+    :param float dose_a: Custom value for the 'a' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float dose_b: Custom value for the 'b' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float dose_c: Custom value for the 'c' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float apix: Pixel size (in Angstroms) of the ice images.
     :param float scaling_factor: Factor by which to scale the particle images before adding noise.
     :return numpy_array: 3D numpy array representing the stack of noisy particle images.
     """
@@ -1705,7 +1771,7 @@ def add_poisson_noise(particle_stack, num_frames, num_cores, scaling_factor=1.0)
     slices = np.array_split(particle_stack, num_cores)
 
     # Prepare the arguments for each slice
-    args = [(s, num_frames, scaling_factor) for s in slices]
+    args = [(s, num_frames, scaling_factor, dose_a, dose_b, dose_c, apix) for s in slices]
 
     # Create a pool of worker processes
     with Pool(num_cores) as pool:
@@ -2061,7 +2127,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
-    star_file_path = os.path.join(f'{structure_dir}.star')
+    star_file_path = os.path.join(f'{structure_dir}/{structure_dir}.star')
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
 
@@ -2234,10 +2300,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
         print_and_log(output, logging.INFO)
-        print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames...", logging.INFO)
+        print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
-        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus)
+        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus, args.dose_a, args.dose_b, args.dose_c, args.apix)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
         print_and_log("Done!\n", logging.INFO)
 
