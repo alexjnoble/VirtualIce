@@ -9,7 +9,7 @@
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
 # Dependencies: EMAN2 installation (namely e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
-#               pip install mrcfile numpy scipy cv2 SimpleITK
+#               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
 #
