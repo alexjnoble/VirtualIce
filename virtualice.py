@@ -2127,7 +2127,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
-    star_file_path = os.path.join(f'{structure_dir}/{structure_dir}.star')
+    star_file_path = next((os.path.join(path) for path in (f'{structure_dir}/{structure_dir}.star', f'{structure_dir}.star') if os.path.isfile(path)), None)  # Hack to get around a bug where the star file is either in the base directory or structure directory.
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
 
