@@ -8,7 +8,7 @@
 # noise micrographs and their corresponding defoci. It is intended that the noise micrographs
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
-# Dependencies: EMAN2 installation (namely e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
+# Dependencies: EMAN2 (namely e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
 #               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
@@ -21,7 +21,7 @@
 # IMOD (separate install; GPL-2.0 license) is optional to output IMOD coordinate files.
 # IMOD source code and packages: https://bio3d.colorado.edu/imod/
 #
-# Ensure compliance with EMAN2's and IMOD's license terms when obtaining and using them.
+# Ensure compliance with license terms when obtaining and using EMAN2 and IMOD.
 __version__ = "1.0.0"
 
 import os
@@ -96,7 +96,7 @@ def validate_positive_int(parser, arg_name, value):
     :param str arg_name: The name of the argument being validated.
     :param int value: The value to be validated.
 
-    :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
+    :raises argparse.ArgumentTypeError: If the value is not None and is <= 0.
     """
     print_and_log("", logging.DEBUG)
     try:
@@ -113,7 +113,7 @@ def validate_positive_float(parser, arg_name, value):
     :param str arg_name: The name of the argument being validated.
     :param int value: The value to be validated.
 
-    :raises argparse.ArgumentTypeError: If the value is not None and is less than or equal to 0.
+    :raises argparse.ArgumentTypeError: If the value is not None and is <= 0.
     """
     print_and_log("", logging.DEBUG)
     try:
@@ -124,12 +124,14 @@ def validate_positive_float(parser, arg_name, value):
 
 def remove_duplicates_structures(lst):
     """
-    Removes duplicate elements from the --structures list while converting to upper case for items without file extensions.
-    Special entries like 'r', 'rp', 're', 'rm', 'random' are not considered duplicates and can repeat.
+    Removes duplicate elements from the --structures list while converting to upper case
+    for items without file extensions. Special entries like 'r', 'rp', 're', 'rm',
+    'random' are not considered duplicates and can repeat.
 
     :param list lst: The input list from which duplicates need to be removed.
 
-    :returns list: A new list with duplicate elements removed, preserving the order of the first unique structure name (case-insensitive for items without file extensions).
+    :returns list: A new list with duplicate elements removed, preserving the order of the
+                   first unique structure name (case-insensitive for items without file extensions).
     """
     print_and_log("", logging.DEBUG)
     seen = set()
@@ -338,7 +340,7 @@ def parse_arguments(script_start_time):
 
 def setup_logging(script_start_time, verbosity):
     """
-    Sets up logging configuration for both console and file output based on the specified verbosity level.
+    Sets up logging configuration for console and file output based on verbosity level.
 
     :param int script_start_time: Timestamp used for naming the log file.
     :param int verbosity: A value that determines the level of detail for log messages. Supports:
@@ -385,7 +387,7 @@ def setup_logging(script_start_time, verbosity):
 
 def print_and_log(message, level=logging.INFO):
     """
-    Prints and logs a message with the specified level, including detailed debug information if verbosity is set to 3.
+    Prints and logs a message with the specified level, including debug details for verbosity level 3.
 
     :param str message: The message to print and log.
     :param int level: The logging level for the message (e.g., logging.INFO, logging.DEBUG).
@@ -452,7 +454,7 @@ def is_local_pdb_path(input_str):
     Check if the input string is a path to a local PDB file.
 
     :param str input_str: The input string to be checked.
-    :return bool: True if the input string is a valid path to a local `.pdb` file, False otherwise.
+    :return bool: True if the input string is a valid local .pdb path, False otherwise.
     """
     print_and_log("", logging.DEBUG)
     return os.path.isfile(input_str) and input_str.endswith('.pdb')
@@ -462,7 +464,7 @@ def is_local_mrc_path(input_str):
     Check if the input string is a path to a local MRC/Map file.
 
     :param str input_str: The input string to be checked.
-    :return bool: True if the input string is a valid path to a local `.mrc` or `.map` file, False otherwise.
+    :return bool: True if the input string is a valid local .mrc or .map path, False otherwise.
     """
     print_and_log("", logging.DEBUG)
     return os.path.isfile(input_str) and (input_str.endswith('.mrc') or input_str.endswith('.map'))
@@ -594,13 +596,21 @@ def download_random_emdb():
 
 def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
     """
-    Process each structure input by identifying whether it's a PDB ID for download, EMDB ID for download, a local file path, or a request for a random structure.
-    Normalize any input .map/.mrc file and convert to .mrc.
+    Process each structure input by identifying whether it's a PDB ID for
+    download, EMDB ID for download, a local file path, or a request for a random
+    structure. Normalize any input .map/.mrc file and convert to .mrc.
 
-    :param str structure_input: The structure input which could be a PDB ID, EMDB ID, a local file path, a request for a random PDB/EMDB structure ('r' or 'random'), a request for a random PDB structure ('rp'), a request for a random EMDB structure ('re' or 'rm').
-    :param float std_devs_above_mean: Number of standard deviations above the mean to threshold downloaded/imported .mrc/.map files (for getting rid of some dust).
-    :param float pixelsize: Pixel size of the micrograph onto which mrcs will be projected. Used to scale downloaded/imported .pdb/.mrc/.map files.
-    :return tuple: A tuple containing the structure ID and file type if the file is successfully identified, downloaded, or a random structure is selected; None if there was an error or the download failed.
+    :param str structure_input: The structure input which could be a PDB ID, EMDB ID,
+        a local file path, a request for a random PDB/EMDB structure ('r' or 'random'),
+        a request for a random PDB structure ('rp'), a request for a random EMDB structure
+        ('re' or 'rm').
+    :param float std_devs_above_mean: Number of standard deviations above the mean to
+        threshold downloaded/imported .mrc/.map files (for getting rid of some dust).
+    :param float pixelsize: Pixel size of the micrograph onto which mrcs will be projected.
+        Used to scale downloaded/imported .pdb/.mrc/.map files.
+    :return tuple: A tuple containing the structure ID and file type if the file is
+        successfully identified, downloaded, or a random structure is selected; None if
+        there was an error or the download failed.
     """
     print_and_log("", logging.DEBUG)
     def process_local_mrc_file(file_path):
@@ -660,23 +670,30 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
 
 def normalize_and_convert_mrc(input_file):
     """
-    Normalize and, if necessary, pad the .map/.mrc file to make all dimensions equal, centering the original volume.
+    Normalize and, if necessary, pad the .map/.mrc file to make all dimensions equal,
+    centering the original volume.
 
-    This function first normalizes the input MRC or MAP file using the `e2proc3d.py` script from EMAN2,
-    ensuring the mean edge value is normalized. If the volume dimensions are not equal, it calculates
-    the necessary padding to make the dimensions equal, with the original volume centered within the new
-    dimensions. The adjusted volume is saved to the output file specified by the input file name or
-    altered to have a '.mrc' extension if necessary.
+    This function normalizes the input MRC or MAP file using the `e2proc3d.py` script from
+    EMAN2, ensuring the mean edge value is normalized. If the volume dimensions are not equal,
+    it calculates the necessary padding to make the dimensions equal, with the original volume
+    centered within the new dimensions. The adjusted volume is saved to the output file
+    specified by the input file name or altered to have a '.mrc' extension if necessary.
 
     :param str input_file: Path to the input MRC or MAP file.
-    :returns str: The base name of the output MRC file, without the '.mrc' extension, or None if an error occurred.
+    :returns str: The base name of the output MRC file, without the '.mrc' extension, or None
+        if an error occurred.
 
-    This function modifies input_file if it's an .mrc file or writes an .mrc file and modifies it if input_file is a .map file.
+    This function modifies input_file if it's an .mrc file or writes an .mrc file and
+    modifies it if input_file is a .map file.
 
     Note:
-    - If the input file is not a cube (i.e., all dimensions are not equal), the function calculates the padding needed to center the volume within a cubic volume whose dimension is equal to the maximum dimension of the original volume.
-    - The volume is padded with the average value found in the original data, ensuring that added regions do not introduce artificial density.
-    - The function attempts to remove the original input file if it's different from the output file to avoid duplication.
+    - If the input file is not a cube (i.e., all dimensions are not equal), the function
+    calculates the padding needed to center the volume within a cubic volume whose dimension
+    is equal to the maximum dimension of the original volume.
+    - The volume is padded with the average value found in the original data, ensuring that
+    added regions do not introduce artificial density.
+    - The function attempts to remove the original input file if it's different from the
+    output file to avoid duplication.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(input_file, mode='r') as mrc:
@@ -755,7 +772,7 @@ def scale_mrc_file(input_mrc_path, pixelsize):
     scaled_dimension_y = int(((original_shape[1] * scale_factor) // 2) * 2)
     scaled_dimension_z = int(((original_shape[2] * scale_factor) // 2) * 2)
 
-    # Construct the e2proc3d.py command for scaling. Using a temp file because otherwise the mrc filesize and header don't match, causing a warning from mrcfile during thresholding
+    # Constructs e2proc3d.py scaling command using temp file to avoid mrcfile warning from filesize/header mismatch
     if scale_factor < 1:
         command = ["e2proc3d.py",
             input_mrc_path, input_mrc_path,
@@ -843,7 +860,7 @@ def lowPassFilter(imgarray, apix=1.0, bin=1, radius=0.0):
     :param float apix: The pixel size in Angstroms per pixel.
     :param int bin: The binning factor applied to the image.
     :param float radius: The desired resolution in Angstroms at which to apply the filter.
-    :return numpy.ndarray: The filtered image array. If radius is None or <= 0.0, the original image array is returned.
+    :return numpy.ndarray: Filtered image array. Returns original array if radius is None or <= 0.
     """
     if radius is None or radius <= 0.0:
         return imgarray
@@ -867,7 +884,7 @@ def write_star_header(file_basename, apix, voltage, cs):
     :param float voltage: The voltage used in the conversion.
     :param float cs: The spherical aberration used in the conversion.
 
-    This function writes the header information for a .star file to the disk with the specified parameters.
+    This function writes header information for a .star file to the disk with the specified parameters.
     """
     print_and_log("", logging.DEBUG)
     with open(f'{file_basename}.star', 'w') as star_file:
@@ -901,9 +918,9 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
 
     :param str structure_name: The name of the structure file.
     :param str image_path: The path of the image to add.
-    :param list_of_tuples particle_locations: A list of tuples, where each tuple contains the x, y coordinates.
+    :param list_of_tuples particle_locations: A list of tuples; each tuple contains the x, y coordinates.
 
-    This function appends particle locations to a .star file on the disk, along with the specified structure_name and image_path.
+    This function appends particle locations to a .star file on the disk, along with the image_path.
     """
     print_and_log("", logging.DEBUG)
     # Open the star file once and write all coordinates
@@ -938,7 +955,7 @@ def write_mod_file(coordinates, output_file):
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .mod file.
 
-    This function converts the particle coordinates in a .point file to an IMOD .mod file and writes it to output_file.
+    This function converts particle coordinates in a .point file to an IMOD .mod file and writes it to output_file.
     """
     print_and_log("", logging.DEBUG)
     # Step 1: Write the .point file
@@ -973,7 +990,7 @@ def save_particle_coordinates(structure_name, particle_locations, output_path, i
     :param list particle_locations: List of particle locations as (x, y) tuples.
     :param Namespace args: Command-line arguments containing user preferences for file outputs.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
 
     This function writes a .star file and optionally a .mod and .coord file.
     """
@@ -998,11 +1015,20 @@ def estimate_mass_from_map(mrc_name):
     :param str mrc_path: Path to the MRC/MAP file.
     :return float: Estimated mass of the protein in kilodaltons (kDa).
 
-    This function estimates the mass of a protein based on the volume of density present in a cryoEM density map (MRC/MAP file) and the provided pixel size. It assumes an average protein density of 1.35 g/cm³ and uses the volume of voxels above a certain threshold to represent the protein. The threshold is set as the mean plus one standard deviation of the density values in the map. This is a simplistic thresholding approach and might need adjustment based on the specific map and protein.
+    This function estimates the mass of a protein based on the volume of density
+    present in a cryoEM density map (MRC/MAP file) and the provided pixel size.
+    It assumes an average protein density of 1.35 g/cm³ and uses the volume of
+    voxels above a certain threshold to represent the protein. The threshold is set
+    as the mean plus 1 standard deviation of the density values in the map. This
+    is a simplistic thresholding approach and might need adjustment based on the
+    specific map and protein.
 
-    The estimated mass is returned in kilodaltons (kDa), considering the conversion from grams to daltons and then to kilodaltons.
+    The estimated mass is returned in kilodaltons (kDa).
 
-    Note: This method assumes the map is already thresholded appropriately and that the entire volume above the threshold corresponds to protein. In practice, determining an effective threshold can be challenging and may require manual intervention or advanced image analysis techniques.
+    Note: This method assumes the map is already thresholded appropriately and that
+    the entire volume above the threshold corresponds to protein. In practice,
+    determining an effective threshold can be challenging and may require manual
+    intervention or advanced image analysis techniques.
     """
     print_and_log("", logging.DEBUG)
     protein_density_g_per_cm3 = 1.35  # Average density of protein
@@ -1031,7 +1057,7 @@ def get_mrc_box_size(mrc_file_path):
     :param str mrc_file_path: The file path to the MRC file whose box size is to be determined.
     :return int: The size of one side of the cubic box in pixels.
     :raises FileNotFoundError: If the specified MRC file does not exist.
-    :raises Exception: If there are issues reading the MRC file, indicating it might be corrupted or improperly formatted.
+    :raises Exception: If there are issues reading the MRC file, indicating corruption or improper format.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_file_path, permissive=True) as mrc:
@@ -1111,7 +1137,7 @@ def extend_and_shuffle_image_list(num_images, image_list_file):
         extended_list += random.sample(image_list, additional_images_needed)
         selected_images = sorted(extended_list)
 
-    print_and_log("Done!\n", logging.INFO)
+    print_and_log("Done!", logging.INFO)
 
     return selected_images
 
@@ -1251,8 +1277,8 @@ def parallel_downsample(image_directory, cpus, downsample_factor):
     """
     Downsample all micrographs in a directory in parallel.
 
-    :param str image_directory: Local directory name where the micrographs are stored in mrc, png, and/or jpeg formats.
-    :param int downsample_factor: Factor by which to downsample the images in both dimensions.
+    :param str image_directory: Local micrograph directory name with mrc/png/jpeg files.
+    :param int downsample_factor: Factor by which to downsample the images in x,y.
     """
     print_and_log("", logging.DEBUG)
     image_extensions = ['.mrc', '.png', '.jpeg']
@@ -1354,7 +1380,7 @@ def downsample_coordinate_files(structure_name, binning, imod_coordinate_file, c
     :param str structure_name: Name of the structure.
     :param int binning: The factor by which to downsample the coordinates.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
     """
     print_and_log("", logging.DEBUG)
     downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{binning}.star", binning)
@@ -1382,7 +1408,7 @@ def read_star_particles(star_file_path):
     with particle coordinates and related data.
 
     :param str star_file_path: Path to the STAR file to read.
-    :return dataframe: DataFrame with columns for micrograph names, particle coordinates, angles, and optics group.
+    :return dataframe: DataFrame with columns: micrograph names, particle coordinates, angles, optics group.
     :raises ValueError: If data_particles section of the STAR file is not found.
     """
     print_and_log("", logging.DEBUG)
@@ -1503,14 +1529,15 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     """
     Generate random/non-random locations for particles within an image.
 
-    :param numpy_array micrograph_image: The micrograph image (used only in the 'micrograph' distribution option.
+    :param numpy_array micrograph_image: Micrograph image (used only in the 'micrograph' distribution option).
     :param tuple image_size: The size of the image as a tuple (width, height).
     :param int num_small_images: The number of small images or particles to generate coordinates for.
     :param int half_small_image_width: Half the width of a small image.
     :param int border_distance: The minimum distance between particles and the image border.
     :param bool no_edge_particles: Prevent particles from being placed up to the edge of the micrograph.
     :param str dist_type: Particle location generation distribution type - 'random' or 'non_random'.
-    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non_random' - 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
+    :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non_random';
+                                     ie. 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
     """
     print_and_log("", logging.DEBUG)
@@ -1676,7 +1703,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
 
 def estimate_noise_parameters(mrc_path):
     """
-    Estimate Poisson (shot noise) and Gaussian (readout and electronic noise) parameters from a single MRC image.
+    Estimate Poisson (shot noise) and Gaussian (readout and electronic noise) parameters from an MRC image.
 
     :param mrc_path: Path to the MRC file.
     :return float, float: A tuple containing the estimated Poisson variance (mean) and Gaussian variance.
@@ -1747,7 +1774,7 @@ def process_slice(args):
 
     return noisy_slice
 
-def add_poisson_noise(particle_stack, num_frames, num_cores, dose_a, dose_b, dose_c, apix, scaling_factor=1.0):
+def add_poisson_noise(particle_stack, num_frames, dose_a, dose_b, dose_c, apix, num_cores, scaling_factor=1.0):
     """
     Add Poisson noise to a stack of particle images.
 
@@ -1758,11 +1785,11 @@ def add_poisson_noise(particle_stack, num_frames, num_cores, dose_a, dose_b, dos
 
     :param numpy_array particle_stack: 3D numpy array representing a stack of 2D particle images.
     :param int num_frames: Number of frames to simulate for each particle image.
-    :param int num_cores: Number of CPU cores to parallelize slices across.
     :param float dose_a: Custom value for the 'a' variable in equation (3) of Grant & Grigorieff, 2015.
     :param float dose_b: Custom value for the 'b' variable in equation (3) of Grant & Grigorieff, 2015.
     :param float dose_c: Custom value for the 'c' variable in equation (3) of Grant & Grigorieff, 2015.
     :param float apix: Pixel size (in Angstroms) of the ice images.
+    :param int num_cores: Number of CPU cores to parallelize slices across.
     :param float scaling_factor: Factor by which to scale the particle images before adding noise.
     :return numpy_array: 3D numpy array representing the stack of noisy particle images.
     """
@@ -1787,12 +1814,13 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
     """
     Create a collage of small images on a blank canvas of the same size as the large image.
     Add Gaussian noise based on the micrograph that the particle collage will be projected onto.
+    Note: Gaussian noise is characteristic of the microscope & camera and is independent of the particles' signal.
     Particles that would extend past the edge of the large image are trimmed before being added.
 
     :param numpy_array large_image: Shape of the large image.
     :param numpy_array small_images: List of small images to place on the canvas.
     :param list_of_tuples particle_locations: Coordinates where each small image should be placed.
-    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
+    :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
     :return numpy_array: Collage of small images.
     """
     print_and_log("", logging.DEBUG)
@@ -1851,13 +1879,19 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
     :param str large_image_path: The path of the micrograph.
     :param str image_path: The output path.
-    :param numpy_array (optional) prob_map: A 2D numpy array representing the probability map used for local scaling of the collage. Each value in this map should be in the range [0, 1], where 0 represents the minimum scaling effect (darkest or thinnest ice) and 1 represents the maximum scaling effect (brightest or thickest ice). If provided, it modulates the scaling of the collage to simulate variations in particle visibility according to the underlying micrograph features. If `None`, a uniform scale is applied to the entire collage.
+    :param numpy_array (optional) prob_map: A 2D numpy array representing the probability map
+        used for local scaling of the collage. Each value in this map should be in the
+        range [0, 1], where 0 represents the minimum scaling effect (darkest or thinnest
+        ice) and 1 represents the maximum scaling effect (brightest or thickest ice). If
+        provided, it modulates the scaling of the collage to simulate variations in
+        particle visibility according to the underlying micrograph features. If `None`, a
+        uniform scale is applied to the entire collage.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
     :param int json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
     :param int polygon_expansion_distance: Distance by which to expand the polygons.
-    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
+    :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
     :return numpy_array list_of_tuples: The blended large image, and the filtered particle locations.
     """
     print_and_log("", logging.DEBUG)
@@ -1978,15 +2012,15 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
     :param str output_path: The file path to save the resulting micrograph.
     :param str dist_type: The type of distribution (random or non_random) for placing particles in micrographs.
-    :param str non_random_dist_type: The type of non_random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
+    :param str non_random_dist_type: non_random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
     :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
     :param float json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
     :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
-    :param float polygon_expansion_distance: Number of pixels to expand each polygon in the json file that defines areas to not place particle coordinates.
-    :param float gaussian_variance: Standard deviation of the Gaussian electronic noise, as measured previously from the ice image.
+    :param float polygon_expansion_distance: Number of pixels to expand polygon exclusion areas in the json file.
+    :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
     :param bool save_as_mrc: Boolean to save the resulting synthetic micrograph and an MRC file.
     :param bool save_as_png: Boolean to save the resulting synthetic micrograph and an PNG file.
     :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
@@ -2114,20 +2148,20 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
     :param str structure_dir: The directory containing the structure's micrographs and STAR file.
     :param int box_size: The box size in pixels for the cropped particles. If None, the function
                          will dynamically determine the box size from the .mrc map used for projections.
-    :param int num_cpus: The number of CPU cores to use for parallel processing. If not specified,
-                         all available cores are used.
+    :param int num_cpus: Number of CPU cores for parallel processing. If unspecified, all cores are used.
 
     Notes:
     - Particles whose specified box would extend beyond the micrograph boundaries are not cropped.
     - This function assumes the presence of a STAR file in the structure directory with the naming
-      convention '{structure_name}.star' containing the necessary coordinates for cropping.
+      convention of '{structure_name}.star' or {structure_dir}/{structure_dir}.star containing the
+      necessary coordinates for cropping.
     """
     print_and_log("", logging.DEBUG)
     print_and_log(f"\nCropping particles for {structure_dir}...\n", logging.INFO)
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
-    star_file_path = next((os.path.join(path) for path in (f'{structure_dir}/{structure_dir}.star', f'{structure_dir}.star') if os.path.isfile(path)), None)  # Hack to get around a bug where the star file is either in the base directory or structure directory.
+    star_file_path = next((path for path in [f'{structure_dir}/{structure_dir}.star', f'{structure_dir}.star'] if os.path.isfile(path)), None)  # Hack to get around a bug where the star file is either in the base directory or structure directory.
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
 
@@ -2161,18 +2195,18 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     and iterates through the generation process for each selected image. It also
     handles cleanup operations post-generation.
 
-    :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
+    :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
     :param str structure_name: The structure name from which synthetic micrographs are to be generated.
     :param str structure_type: Whether the structure is a pdb or mrc.
     :param str structure_index: The index of the structure that micrographs are being generated from.
     :param str total_structures: The total number of structures requested.
 
-    :return int int: The total number of particles actually added to all of the micrographs, and the box size of the projected volume.
+    :return int int: Total number of particles actually added to all micrographs, and box size of the projected volume.
 
     This function writes .hdf, .mrc, and .txt files to the disk and deletes several files during cleanup.
     """
     print_and_log("", logging.DEBUG)
-    # Convert short distribution to full distribution name
+    # Convert short particle distribution to full distribution name
     distribution_mapping = {'r': 'random', 'n': 'non_random', 'm': 'micrograph', 'g': 'gaussian', 'c': 'circular', 'ic': 'inverse_circular'}
     distribution = distribution_mapping.get(args.distribution, args.distribution)
 
@@ -2231,7 +2265,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         ice_thickness_printout = (fudge_factor - 20.45*ice_thickness)/(0.32*ice_thickness)
 
         # Set `num_particles` based on the user input (args.num_particles) with the following rules:
-        # 1. If the user provides a value for `args.num_particles` and it is less than or equal to the `max_num_particles`, use it.
+        # 1. If the user provides a value for `args.num_particles` and it is <= the `max_num_particles`, use it.
         # 2. If the user does not provide a value, use `rand_num_particles`.
         # 3. If the user's provided value exceeds `max_num_particles`, use `max_num_particles` instead.
         # 4. If the user specifies 'max', use max_num_particles, otherwise apply the existing conditions
@@ -2303,7 +2337,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
         particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
-        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.cpus, args.dose_a, args.dose_b, args.dose_c, args.apix)
+        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
         print_and_log("Done!\n", logging.INFO)
 
@@ -2314,7 +2348,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(output, logging.INFO)
         print_and_log("Done!\n", logging.INFO)
 
-        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a relative average ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
+        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
@@ -2379,8 +2413,8 @@ def clean_up(args, structure_name):
     """
     Clean up files at the end of the script.
 
-    :param Namespace args: The argument namespace containing all the command-line arguments specified by the user.
-    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
+    :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
+    :param str structure_name: The structure name from which synthetic micrographs were generated.
 
     This function deletes several files.
     """
@@ -2430,7 +2464,7 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     :param int total_structures: The total number of structures.
     :param str time_str: The string representation of the total generation time.
     :param int total_number_of_particles_projected: The total number of particles projected.
-    :param int total_number_of_particles_with_saved_coordinates: The total number of particles saved to coordinate files.
+    :param int total_number_of_particles_with_saved_coordinates: Total number of particles saved to coordinate files.
     :param int total_cropped_particles: The total number of cropped particles.
     :param bool crop_particles: Whether or not particles were cropped.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
