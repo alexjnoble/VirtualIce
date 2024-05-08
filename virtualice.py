@@ -328,13 +328,11 @@ def parse_arguments(script_start_time):
     formatted_output = formatted_output.rstrip(";\n")  # Remove the trailing semicolon
     argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
 
-    print_and_log("\n-----------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log("                  \033[1mVirtualIce Run Configuration\033[0m", logging.WARNING)
-    print_and_log("-----------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log(f"Generating {args.num_images} synthetic micrographs for each structure ({args.structures}) using micrographs in {args.image_directory.rstrip('/')}/ ...\n", logging.WARNING)
-    print_and_log("Input arguments:\n", logging.WARNING)
+    print_and_log(f"\033[1m{'-' * 80}\n{('VirtualIce Run Configuration').center(80)}\n{'-' * 80}\033[0m", logging.WARNING)
+    print_and_log(textwrap.fill(f"Generating {args.num_images} synthetic micrograph{'' if args.num_images == 1 else 's'} per structure ({', '.join(args.structures)}) using micrographs in {args.image_directory.rstrip('/')}/", width=80), logging.WARNING)
+    print_and_log("\nInput arguments:\n", logging.WARNING)
     print_and_log(argument_printout, logging.WARNING)
-    print_and_log("-----------------------------------------------------------------------------------------------\n", logging.WARNING)
+    print_and_log(f"\033[1m{'-' * 80}\033[0m\n", logging.WARNING)
 
     return args
 
@@ -2249,10 +2247,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         repeat_number = micrograph_usage_count[fname]
         repeat_suffix = f"{repeat_number}" if repeat_number > 1 else ""
 
-        extra_hyphens = '-' * (len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(structure_name)) + len(str(structure_index)) + len(str(total_structures)) + len(str(fname)))
-        print_and_log(f"\n-------------------------------------------------------{extra_hyphens}", logging.WARNING)
+        num_hyphens = '-' * (55 + len(str(current_micrograph_number)) + len(str(args.num_images)) + len(str(structure_name)) + len(str(structure_index)) + len(str(total_structures)) + len(str(fname)))
+        print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
         print_and_log(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
-        print_and_log(f"-------------------------------------------------------{extra_hyphens}\n", logging.WARNING)
+        print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
 
         # Random or user-specified ice thickness
         # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there are fudge factors just so the user gets a number that feels right)
@@ -2454,14 +2452,14 @@ def clean_up(args, structure_name):
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-def print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
+def print_run_information(num_micrographs, structure_names, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, crop_particles,
                           imod_coordinate_file, coord_coordinate_file, output_directory):
     """
     Print run information based on the provided input variables.
 
     :param int num_micrographs: The number of micrographs.
-    :param int total_structures: The total number of structures.
+    :param list structure_names: List of names of all of the structures.
     :param str time_str: The string representation of the total generation time.
     :param int total_number_of_particles_projected: The total number of particles projected.
     :param int total_number_of_particles_with_saved_coordinates: Total number of particles saved to coordinate files.
@@ -2472,23 +2470,22 @@ def print_run_information(num_micrographs, total_structures, time_str, total_num
     :param str output_directory: Output directory for all run files.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log("\n\n-----------------------------------------------------------------------------------------------------", logging.WARNING)
-    print_and_log("                  \033[1mVirtualIce Generation Summary\033[0m", logging.WARNING)
-    print_and_log("-----------------------------------------------------------------------------------------------------", logging.WARNING)
+    total_structures = len(structure_names)
+    print_and_log(f"\n\n\033[1m{'-' * 100}\n{('VirtualIce Generation Summary').center(100)}\n{'-' * 100}\033[0m", logging.WARNING)
     print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} from \033[1m{total_structures}\033[0m structure{'s' if total_structures != 1 else ''}: \033[1m{time_str}\033[0m", logging.WARNING)
-    print_and_log(f"A total of: \033[1m{total_number_of_particles_projected}\033[0m particles projected, \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m saved to coordinate files" + (f", \033[1m{total_cropped_particles}\033[0m particles cropped" if crop_particles else ""), logging.WARNING)
-    print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m" + (f" | Crop directory: \033[1m[structure_name(s)]/Particles/\033[0m\n" if crop_particles else "\n"), logging.WARNING)
+    print_and_log(f"Total: \033[1m{total_number_of_particles_projected}\033[0m particles projected, \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m saved to {'.star file' if not imod_coordinate_file and not coord_coordinate_file else 'coordinate files'}" + (f", \033[1m{total_cropped_particles}\033[0m particles cropped" if crop_particles else ""), logging.WARNING)
+    print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m" + (f", Crop sub-directory: \033[1m{structure_names[0] if total_structures == 1 else '[structure_names]'}/Particles/\033[0m\n" if crop_particles else "\n"), logging.WARNING)
 
-    print_and_log("One .star file per structure is located in the structure directories.", logging.WARNING)
+    print_and_log(f"One .star file per structure is located in {'the' if total_structures == 1 else 'each'} structure sub-directory.", logging.WARNING)
 
     if coord_coordinate_file:
-        print_and_log("One (x y) .coord file per micrograph is located in the structure directories.", logging.WARNING)
+        print_and_log(f"One (x y) .coord file per micrograph is located in the structure sub-director{'y' if total_structures == 1 else 'ies'}.", logging.WARNING)
 
     if imod_coordinate_file:
-        print_and_log("One IMOD .mod file per micrograph is located in the structure directories.", logging.WARNING)
+        print_and_log(f"One IMOD .mod file per micrograph is located in the structure sub-director{'y' if total_structures == 1 else 'ies'}.", logging.WARNING)
         print_and_log("To open a micrograph with an IMOD .mod file, run a command of this form:", logging.WARNING)
-        print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace 'image.mrc' and 'image.mod' with your files)", logging.WARNING)
-    print_and_log("-----------------------------------------------------------------------------------------------------\n", logging.WARNING)
+        print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace with your files)", logging.WARNING)
+    print_and_log(f"\033[1m{'-' * 100}\033[0m\n", logging.WARNING)
 
 def main():
     """
@@ -2537,7 +2534,7 @@ def main():
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
 
-    print_run_information(num_micrographs, total_structures, time_str, total_number_of_particles_projected,
+    print_run_information(num_micrographs, args.structures, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
                           args.imod_coordinate_file, args.coord_coordinate_file, args.output_directory)
 
