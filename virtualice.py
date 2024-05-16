@@ -169,10 +169,10 @@ def parse_arguments(script_start_time):
       1. Basic usage: virtualice.py -s 1TIM -n 10
          Generates 10 random micrographs of PDB 1TIM.
 
-      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -j 2 -C
+      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2 -C
          Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
          Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
-         Uses a non-random distribution of particles, parallelizes micrograph generation across 2 CPUs, and crops particles
+         Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
     """,
     formatter_class=argparse.RawDescriptionHelpFormatter)  # Preserves whitespace for better formatting
 
@@ -228,6 +228,7 @@ def parse_arguments(script_start_time):
     # Particle Cropping Options
     particle_cropping_group = parser.add_argument_group('Particle Cropping Options')
     particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Particles will be extracted to the [structure_name]/Particles/ directory as .mrc files. Default is no cropping.")
+    particle_cropping_group.add_argument("-CM", "--max_crop_particles", type=int, default=None, help="Maximum number of particles to crop from micrographs.")
     particle_cropping_group.add_argument("-X", "--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
 
     # Micrograph and Coordinate Output Options
@@ -967,7 +968,7 @@ def write_mod_file(coordinates, output_file):
 
 def write_coord_file(coordinates, output_file):
     """
-    Write a generic .coord file with particle coordinates.
+    Write a generic .coord file with particle (x,y) coordinates.
 
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .coord file.
@@ -1874,7 +1875,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :param float scale: The scale factor to adjust the intensity of the particles.
     :param str structure_name: The name of the structure file.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
-    :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
+    :param bool coord_coordinate_file: Boolean for whether or not to output a .coord coordinate file.
     :param str large_image_path: The path of the micrograph.
     :param str image_path: The output path.
     :param numpy_array (optional) prob_map: A 2D numpy array representing the probability map
@@ -2012,7 +2013,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param str dist_type: The type of distribution (random or non_random) for placing particles in micrographs.
     :param str non_random_dist_type: non_random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
     :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
-    :param bool coord_coordinate_file: Boolean for whether or not to output a generic .coord coordinate file.
+    :param bool coord_coordinate_file: Boolean for whether or not to output a .coord coordinate file.
     :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
     :param float json_scale: Binning factor used when labeling junk to create the json file.
     :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
@@ -2109,7 +2110,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     return len(particle_locations), len(filtered_particle_locations)
 
-def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
+def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, max_crop_particles):
     """
     Crops particles from a single micrograph.
 
@@ -2117,6 +2118,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     :param DataFrame particle_rows: DataFrame rows of particles to be cropped from the micrograph.
     :param str particles_dir: Directory to save cropped particles.
     :param int box_size: The box size in pixels for the cropped particles.
+    :param int max_crop_particles: The maximum number of particles to crop from the micrograph.
 
     This function writes .mrc files to the disk.
     """
@@ -2124,6 +2126,8 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
     cropped_count = 0
     with mrcfile.open(micrograph_path, permissive=True) as mrc:
         for _, row in particle_rows.iterrows():
+            if max_crop_particles and cropped_count >= max_crop_particles:
+                break
             x, y = int(row['coord_x']), int(row['coord_y'])
             half_box_size = box_size // 2
 
@@ -2137,7 +2141,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size):
 
     return cropped_count
 
-def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
+def crop_particles_from_micrographs(structure_dir, box_size, num_cpus, max_crop_particles):
     """
     Crops particles from micrographs based on coordinates specified in a micrograph STAR file
     and saves them with a specified box size. This function operates in parallel, using a specified
@@ -2176,7 +2180,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus):
                 continue
 
             print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
-            future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size)
+            future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, max_crop_particles)
             futures.append(future)
 
         for future in futures:
@@ -2466,7 +2470,7 @@ def print_run_information(num_micrographs, structure_names, time_str, total_numb
     :param int total_cropped_particles: The total number of cropped particles.
     :param bool crop_particles: Whether or not particles were cropped.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to downsample and save generic .coord coordinate files.
+    :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
     :param str output_directory: Output directory for all run files.
     """
     print_and_log("", logging.DEBUG)
@@ -2526,7 +2530,7 @@ def main():
             # Check if cropping is enabled and perform cropping
             if args.crop_particles:
                 box_size = args.box_size if args.box_size is not None else box_size
-                total_cropped_particles += crop_particles_from_micrographs(structure_name, box_size, args.cpus)
+                total_cropped_particles += crop_particles_from_micrographs(structure_name, box_size, args.cpus, args.max_crop_particles)
 
             clean_up(args, structure_name)
 
