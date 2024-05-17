@@ -49,7 +49,7 @@ from urllib import request, error
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
-# Suppress the RuntimeWarning raised by mrcfile for the entire script; sometimes it says filesize is unexpected
+# Suppress RuntimeWarnings raised by mrcfile for the entire script; sometimes it says filesize is unexpected
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
 
 # Global variable to store verbosity level
@@ -836,6 +836,46 @@ def scale_mrc_file(input_mrc_path, pixelsize):
     except subprocess.CalledProcessError as e:
         print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
 
+def reorient_mrc(input_mrc_path, output_mrc_path):
+    """
+    Reorient an MRC file so that the structure's principal axes align with the coordinate axes.
+
+    The function performs PCA on the non-zero voxels to align the longest axis with the x-axis,
+    the second longest axis with the y-axis, and the third longest axis with the z-axis.
+
+    :param str input_mrc_path: The path to the input MRC file.
+    :param str output_mrc_path: The path to the output MRC file.
+    """
+    data = readmrc(input_mrc_path)
+
+    # Get the coordinates of non-zero voxels
+    non_zero_indices = np.argwhere(data)
+
+    # Perform PCA
+    mean_coords = np.mean(non_zero_indices, axis=0)
+    centered_coords = non_zero_indices - mean_coords
+    cov_matrix = np.cov(centered_coords, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+
+    # Sort eigenvectors by eigenvalues in descending order
+    sorted_indices = np.argsort(eigenvalues)[::-1]
+    sorted_eigenvectors = eigenvectors[:, sorted_indices]
+
+    # Align coordinates with principal axes
+    aligned_coords = np.dot(centered_coords, sorted_eigenvectors)
+    aligned_coords = np.round(aligned_coords).astype(int) + np.round(mean_coords).astype(int)
+
+    # Create an empty array with the same shape as the original data
+    reoriented_data = np.zeros_like(data)
+
+    # Fill the reoriented data with the non-zero voxels
+    for original_coord, new_coord in zip(non_zero_indices, aligned_coords):
+        if 0 <= new_coord[0] < reoriented_data.shape[0] and 0 <= new_coord[1] < reoriented_data.shape[1] and 0 <= new_coord[2] < reoriented_data.shape[2]:
+            reoriented_data[new_coord[0], new_coord[1], new_coord[2]] = data[original_coord[0], original_coord[1], original_coord[2]]
+
+    writemrc(output_mrc_path, reoriented_data)
+    print_and_log("Reoriented MRC", logging.INFO)
+
 def convert_pdb_to_mrc(pdb_name, apix, res):
     """
     Convert a PDB file to MRC format using EMAN2's e2pdb2mrc.py script.
@@ -868,7 +908,7 @@ def readmrc(mrc_path):
     Read an MRC file and return its data as a NumPy array.
 
     :param str mrc_path: The file path of the MRC file to read.
-    :return numpy_array: The data of the MRC file as a NumPy array.
+    :return numpy_array float: The data of the MRC file as a NumPy array, and the voxel size.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_path, mode='r') as mrc:
@@ -2264,6 +2304,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     # Convert PDB to MRC for PDBs and return the mass or estimate the mass of the MRC
     if structure_type == "pdb":
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
+        reorient_mrc(f'{structure_name}.mrc', f'{structure_name}.mrc')
         print_and_log(f"Mass of PDB {structure_name}: {mass} kDa", logging.INFO)
         fudge_factor = 4.8  # Note: larger number = darker particles
     elif structure_type == "mrc":
