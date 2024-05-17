@@ -38,6 +38,7 @@ import logging
 import mrcfile
 import argparse
 import textwrap
+import warnings
 import itertools
 import subprocess
 import numpy as np
@@ -47,6 +48,9 @@ from multiprocessing import Pool
 from urllib import request, error
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
+
+# Suppress the RuntimeWarning raised by mrcfile for the entire script; sometimes it says filesize is unexpected
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
 
 # Global variable to store verbosity level
 global_verbosity = 0
@@ -456,7 +460,8 @@ def is_local_pdb_path(input_str):
     :return bool: True if the input string is a valid local .pdb path, False otherwise.
     """
     print_and_log("", logging.DEBUG)
-    return os.path.isfile(input_str) and input_str.endswith('.pdb')
+    full_path = os.path.join(os.pardir, input_str)
+    return os.path.isfile(full_path) and input_str.endswith('.pdb')
 
 def is_local_mrc_path(input_str):
     """
@@ -466,7 +471,8 @@ def is_local_mrc_path(input_str):
     :return bool: True if the input string is a valid local .mrc or .map path, False otherwise.
     """
     print_and_log("", logging.DEBUG)
-    return os.path.isfile(input_str) and (input_str.endswith('.mrc') or input_str.endswith('.map'))
+    full_path = os.path.join(os.pardir, input_str)
+    return os.path.isfile(full_path) and (input_str.endswith('.mrc') or input_str.endswith('.map'))
 
 def is_emdb_id(input_str):
     """
@@ -493,6 +499,8 @@ def is_pdb_id(structure_input):
 def download_pdb(pdb_id, suppress_errors=False):
     """
     Download a PDB file from the RCSB website.
+    Attempts to download the symmetrized .pdb1.gz file first.
+    If the .pdb1.gz file is not available, download the regular PDB file.
 
     :param str pdb_id: The ID of the PDB to be downloaded.
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
@@ -501,13 +509,32 @@ def download_pdb(pdb_id, suppress_errors=False):
     This function writes a .pdb file to the disk.
     """
     print_and_log("", logging.DEBUG)
+    symmetrized_url = f"https://files.rcsb.org/download/{pdb_id}.pdb1.gz"
+    regular_url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
+    symmetrized_pdb_gz_path = f"{pdb_id}.pdb1.gz"
+    symmetrized_pdb_path = f"{pdb_id}.pdb1"
+    regular_pdb_path = f"{pdb_id}.pdb"
+    downloaded_any = False
     if not suppress_errors:
         print_and_log(f"Downloading PDB {pdb_id}...", logging.INFO)
-    url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
-    try:
-        request.urlretrieve(url, f"{pdb_id}.pdb")
-        print_and_log(f"Done!\n", logging.INFO)
-        return True
+
+    try:  # Try downloading the symmetrized .pdb1.gz file
+        request.urlretrieve(symmetrized_url, symmetrized_pdb_gz_path)
+
+        # Unzip the .pdb1.gz file
+        with gzip.open(symmetrized_pdb_gz_path, 'rb') as f_in:
+            with open(symmetrized_pdb_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        # Remove the .pdb1.gz file
+        os.remove(symmetrized_pdb_gz_path)
+        downloaded_any = True
+    except:
+    	pass
+
+    try:  # Try downloading the regular .pdb file
+        request.urlretrieve(regular_url, regular_pdb_path)
+        downloaded_any = True
     except error.HTTPError as e:
         if not suppress_errors:
             print_and_log(f"Failed to download PDB {pdb_id}. HTTP Error: {e.code}\n", logging.WARNING)
@@ -516,6 +543,23 @@ def download_pdb(pdb_id, suppress_errors=False):
         if not suppress_errors:
             print_and_log(f"An unexpected error occurred while downloading PDB {pdb_id}. Error: {e}\n", logging.WARNING)
         return False
+
+    if not downloaded_any:
+        return False
+
+    # Determine the largest .pdb file and remove the other one if both exist
+    if os.path.exists(regular_pdb_path) and os.path.exists(symmetrized_pdb_path):
+        if os.path.getsize(symmetrized_pdb_path) > os.path.getsize(regular_pdb_path):
+            print_and_log(f"Downloaded symmetrized PDB {pdb_id}\n", logging.INFO)
+            os.remove(regular_pdb_path)
+            os.rename(symmetrized_pdb_path, regular_pdb_path)
+        else:
+            print_and_log(f"Downloaded PDB {pdb_id}\n", logging.INFO)
+            os.remove(symmetrized_pdb_path)
+    elif os.path.exists(symmetrized_pdb_path):
+        os.rename(symmetrized_pdb_path, regular_pdb_path)
+
+    return True
 
 def download_random_pdb():
     """
@@ -591,6 +635,7 @@ def download_random_emdb():
         emdb_id = str(random.randint(1, 43542)).zfill(4)  # Makes a 4 or 5 digit number with leading zeros. Random 1-3 digits will also be 4 digit.
         success = download_emdb(emdb_id, suppress_errors=True)
         if success:
+            print_and_log(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
             return emdb_id
 
 def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
@@ -642,14 +687,14 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
     elif is_local_pdb_path(structure_input):
         print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
-        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
-            shutil.copy(structure_input, os.path.basename(structure_input))
+        full_path = os.path.join(os.pardir, structure_input)
+        shutil.copy(full_path, os.path.basename(structure_input))
         return (os.path.basename(structure_input).split('.')[0], "pdb")
     elif is_local_mrc_path(structure_input):
         print_and_log(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
-        if not os.path.samefile(structure_input, os.path.basename(structure_input)):
-            shutil.copy(structure_input, os.path.basename(structure_input))
+        full_path = os.path.join(os.pardir, structure_input)
+        shutil.copy(full_path, os.path.basename(structure_input))
         return process_local_mrc_file(structure_input)
     elif is_emdb_id(structure_input):
         if download_emdb(structure_input):
