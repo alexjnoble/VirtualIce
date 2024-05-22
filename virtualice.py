@@ -8,7 +8,7 @@
 # noise micrographs and their corresponding defoci. It is intended that the noise micrographs
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
-# Dependencies: EMAN2 (namely e2pdb2mrc.py, e2project3d.py, e2proc3d.py, and e2proc2d.py)
+# Dependencies: EMAN2 (namely e2pdb2mrc.py, e2proc3d.py, and e2proc2d.py)
 #               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
@@ -46,6 +46,7 @@ import pandas as pd
 import SimpleITK as sitk
 from multiprocessing import Pool
 from urllib import request, error
+from scipy.ndimage import affine_transform
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
@@ -204,18 +205,17 @@ def parse_arguments(script_start_time):
 
     # Simulation Options
     simulation_group = parser.add_argument_group('Simulation Options')
-    simulation_group.add_argument('--dose_damage', type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015.")
-    simulation_group.add_argument('--dose_a', type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
-    simulation_group.add_argument('--dose_b', type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
-    simulation_group.add_argument('--dose_c', type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("--dose_damage", type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015. Default is %(default)s")
+    simulation_group.add_argument("--dose_a", type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("--dose_c", type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
-    simulation_group.add_argument("-p", "--preferred_orientation", action="store_true", help="Enable preferred orientation mode")
-    simulation_group.add_argument("-ea", "--fixed_euler_angle", type=float, default=0.0, help="Fixed Euler angle for preferred orientation mode (usually 0 or 90 degrees) (EMAN2 e2project3d.py option)")
-    simulation_group.add_argument("-om", "--orientgen_method", type=str, default="even", choices=["eman", "even", "opt", "saff"], help="Orientation generator method to use for preferred orientation (EMAN2 e2project3d.py option). Default is %(default)s")
-    simulation_group.add_argument("-da", "--delta_angle", type=float, default=13.1, help="The angular separation of preferred orientations in degrees for non-fixed angles. Default is a number that doesn't cause aliasing after 360 degrees")
-    simulation_group.add_argument("-ph", "--phitoo", type=float, default=0.1, help="Phitoo value for random 3D projection (ie. no preferred orientation) (EMAN2 e2project3d.py option). This is the angular step size for rotating before projecting. Default is %(default)s")
+    simulation_group.add_argument("-om", "--orientation_mode", type=str, choices=['random', 'uniform', 'preferred'], default='random', help="Orientation mode for projections. Options are: random, uniform, preferred. Default is %(default)s")
+    simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90, 0, 0]' or '[*, 0, 90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
+    simulation_group.add_argument("-av", "--angle_variation", type=float, default=5.0, help="Standard deviation for normal distribution of variations around preferred angles (in degrees). Default is %(default)s")
+    simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.8, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
     simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
     simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
     simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
@@ -846,6 +846,7 @@ def reorient_mrc(input_mrc_path, output_mrc_path):
     :param str input_mrc_path: The path to the input MRC file.
     :param str output_mrc_path: The path to the output MRC file.
     """
+    print_and_log("", logging.DEBUG)
     data = readmrc(input_mrc_path)
 
     # Get the coordinates of non-zero voxels
@@ -946,12 +947,13 @@ def lowPassFilter(imgarray, apix=1.0, bin=1, radius=0.0):
     :param float radius: The desired resolution in Angstroms at which to apply the filter.
     :return numpy.ndarray: Filtered image array. Returns original array if radius is None or <= 0.
     """
+    print_and_log("", logging.DEBUG)
     if radius is None or radius <= 0.0:
         return imgarray
 
     # Adjust sigma for apix and binning
     sigma = float(radius / apix / float(bin))
-    
+
     # Convert numpy array to SimpleITK image for processing, then convert back
     sitkImage = sitk.GetImageFromArray(imgarray)
     sitkImage = sitk.SmoothingRecursiveGaussian(sitkImage, sigma=sigma / 10.0)  # 10.0 is a fudge factor that gets dose damaging about right.
@@ -1541,14 +1543,14 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
     max_indices = np.max(non_zero_indices, axis=0) + 1
 
     # Compute the size of the largest possible equilateral cube
-    cube_size = np.max(max_indices - min_indices)
+    min_cube_size = np.max(max_indices - min_indices)
 
     # Increase the cube size by #%
-    cube_size = int(np.ceil(cube_size * (100 + scale_percent)/100))
+    cube_size = int(np.ceil(min_cube_size * (100 + scale_percent)/100))
 
     # Find the next largest number that is divisible by at least 3 of the 5 smallest prime numbers
     primes = [2, 3, 5]
-    cube_size = min(next_divisible_by_primes(cube_size, primes, 2), 336)  # 320 is the largest practical box size before memory issues or seg faults
+    cube_size = ((min(next_divisible_by_primes(cube_size, primes, 2), 336) + 1) // 2) * 2  # 336 is the largest practical box size before memory issues or seg faults
 
     # Adjust the minimum and maximum indices to fit the equilateral cube
     min_indices -= (cube_size - (max_indices - min_indices)) // 2
@@ -1570,6 +1572,190 @@ def trim_vol_return_rand_particle_number(input_mrc, input_micrograph, scale_perc
     rand_num_particles = non_uniform_random_number(2, max_num_particles, 100, 0.5)
 
     return rand_num_particles, max_num_particles
+
+def parse_preferred_angles(preferred_angles):
+    """
+    Parse a list of preferred angles into a structured format.
+
+    :param list_of_str preferred_angles: List of preferred angles in string format.
+    :return list_of_tuples: List of preferred angles in numeric format.
+    """
+    print_and_log("", logging.DEBUG)
+    parsed_angles = []
+    for angle_set in preferred_angles:
+        angles = angle_set.strip('[]').split(',')
+        angles = [angle.strip() for angle in angles]
+        parsed_angles.append(tuple(angles))
+    return parsed_angles
+
+def generate_orientations(preferred_angles, angle_variation, num_preferred, num_random):
+    """
+    Generate a list of orientations based on preferred angles with specified variations
+    and a number of random orientations.
+
+    :param list_of_tuples preferred_angles: List of preferred angles in numeric format.
+    :param float angle_variation: Standard deviation for the normal distribution of angle variations.
+    :param int num_preferred: Number of preferred orientations to generate.
+    :param int num_random: Number of random orientations to generate.
+    :return list_of_tuples: List of orientations with preferred and random angles, truncated to 3 decimal places.
+    """
+    print_and_log("", logging.DEBUG)
+    preferred_orientations = []
+    for _ in range(num_preferred):
+        angles = preferred_angles[np.random.randint(len(preferred_angles))]
+        alpha, beta, gamma = angles
+        alpha = np.round(np.random.uniform(0, 360), 3) if alpha == '*' else np.round(np.random.normal(float(alpha), angle_variation / 2), 3)  # angle_variation / 2 because this is +-angle_variation
+        beta = np.round(np.random.uniform(0, 180), 3) if beta == '*' else np.round(np.random.normal(float(beta), angle_variation / 2), 3)
+        gamma = np.round(np.random.uniform(0, 360), 3) if gamma == '*' else np.round(np.random.normal(float(gamma), angle_variation / 2), 3)
+        preferred_orientations.append((alpha % 360, beta % 180, gamma % 360))
+
+    random_orientations = [(np.round(np.random.uniform(0, 360), 3), np.round(np.random.uniform(0, 180), 3), np.round(np.random.uniform(0, 360), 3)) for _ in range(num_random)]
+    return preferred_orientations + random_orientations
+
+def euler_to_matrix(alpha, beta, gamma):
+    """
+    Convert ZYZ Euler angles to a rotation matrix.
+
+    :param float alpha: First rotation angle in degrees.
+    :param float beta: Second rotation angle in degrees.
+    :param float gamma: Third rotation angle in degrees.
+    :return numpy.ndarray: The combined rotation matrix.
+    """
+    print_and_log("", logging.DEBUG)
+    alpha = np.deg2rad(alpha)
+    beta = np.deg2rad(beta)
+    gamma = np.deg2rad(gamma)
+
+    Rz1 = np.array([[np.cos(alpha), -np.sin(alpha), 0],
+                    [np.sin(alpha), np.cos(alpha), 0],
+                    [0, 0, 1]])
+
+    Ry = np.array([[np.cos(beta), 0, np.sin(beta)],
+                   [0, 1, 0],
+                   [-np.sin(beta), 0, np.cos(beta)]])
+
+    Rz2 = np.array([[np.cos(gamma), -np.sin(gamma), 0],
+                    [np.sin(gamma), np.cos(gamma), 0],
+                    [0, 0, 1]])
+
+    R = np.dot(Rz2, np.dot(Ry, Rz1))
+    return R
+
+def trim_volume(volume_data):
+    """
+    Trim the volume data to the smallest cube containing non-zero voxels.
+
+    :param numpy.ndarray volume_data: 3D volume data to be trimmed.
+    :return numpy.ndarray: Trimmed 3D volume data.
+    """
+    print_and_log("", logging.DEBUG)
+    # Find the non-zero entries and their indices
+    non_zero_indices = np.argwhere(volume_data)
+
+    # Calculate the centroid of the non-zero voxels
+    centroid = np.mean(non_zero_indices, axis=0)
+
+    # Calculate the distances from the centroid to all non-zero voxels
+    distances = np.linalg.norm(non_zero_indices - centroid, axis=1)
+
+    # Find the maximum distance (radius) and compute the cube size needed
+    max_distance = np.max(distances)
+    min_cube_size = int(np.ceil(2 * max_distance))
+
+    # Calculate the start and end indices for the trimmed volume
+    center_idx = centroid.astype(int)
+    half_size = min_cube_size // 2
+    start_idx = np.maximum(center_idx - half_size, 0)
+    end_idx = np.minimum(center_idx + half_size, volume_data.shape)
+
+    # Slice the original array to obtain the trimmed array
+    trimmed_volume = volume_data[start_idx[0]:end_idx[0], start_idx[1]:end_idx[1], start_idx[2]:end_idx[2]]
+
+    return trimmed_volume
+
+def pad_projection(projection, original_shape):
+    """
+    Pad the 2D projection back to the original shape with zeros.
+
+    :param numpy.ndarray projection: 2D projection to be padded.
+    :param tuple original_shape: Original shape of the 3D volume.
+    :return numpy.ndarray: Padded 2D projection.
+    """
+    print_and_log("", logging.DEBUG)
+    pad_x = (original_shape[0] - projection.shape[0]) // 2
+    pad_y = (original_shape[1] - projection.shape[1]) // 2
+
+    padded_projection = np.pad(projection, ((pad_x, pad_x), (pad_y, pad_y)), mode='constant')
+
+    return padded_projection
+
+def generate_projection(angle, volume_data):
+    """
+    Generate a 2D projection of the 3D volume data by rotating it to the specified angle using the ZYZ convention.
+
+    :param tuple_of_floats angle: Tuple of three Euler angles (alpha, beta, gamma) in degrees.
+    :param numpy.ndarray volume_data: 3D volume data to be projected.
+    :return numpy.ndarray: 2D projection of the volume data.
+    """
+    print_and_log("", logging.DEBUG)
+    alpha, beta, gamma = angle
+    rotation_matrix = euler_to_matrix(alpha, beta, gamma)
+
+    # Trim the volume to the smallest possible cube containing non-zero voxels
+    trimmed_volume = trim_volume(volume_data)
+
+    # Center of the trimmed volume
+    center = np.array(trimmed_volume.shape) / 2
+
+    # Apply affine transformation
+    rotated_volume = affine_transform(trimmed_volume, rotation_matrix, offset=center - np.dot(rotation_matrix, center), order=1)
+
+    # Project the rotated volume
+    projection = np.sum(rotated_volume, axis=2)
+
+    # Pad the projection back to the original shape
+    original_shape = volume_data.shape[:2]
+    padded_projection = pad_projection(projection, original_shape)
+
+    return padded_projection
+
+def generate_projections(structure_name, num_projections, orientation_mode, preferred_angles, angle_variation, preferred_weight, num_cores):
+    """
+    Generate a list of projections for a given structure based on the specified orientation mode.
+
+    :param str structure_name: Name of the structure for which to generate projections.
+    :param int num_projections: Number of projections to generate.
+    :param str orientation_mode: Orientation mode for generating projections ('random', 'uniform', 'preferred').
+    :param list_of_strs preferred_angles: List of sets of three Euler angles for preferred orientations, optional.
+    :param float angle_variation: Standard deviation for normal distribution of variations around preferred angles, optional.
+    :param float preferred_weight: Weight of the preferred orientations in the range [0, 1], optional.
+    :param int num_cores: Number of CPU cores to use for parallel processing, optional.
+    :return numpy.ndarray: Array of generated projections.
+    """
+    print_and_log("", logging.DEBUG)
+    projections = []
+    volume_data = readmrc(f"{structure_name}.mrc")
+
+    if orientation_mode == 'random':
+        orientations = [(np.random.uniform(0, 360), np.random.uniform(0, 180), np.random.uniform(0, 360)) for _ in range(num_projections)]
+    elif orientation_mode == 'uniform':
+        orientations = [(angle, np.random.uniform(0, 180), np.random.uniform(0, 360)) for angle in np.linspace(0, 360, num=num_projections, endpoint=False)]
+    elif orientation_mode == 'preferred':
+        if preferred_angles is None:
+            preferred_angles = [['*', '*', '*']]
+        else:
+            preferred_angles = parse_preferred_angles(preferred_angles)
+        num_preferred = int(num_projections * preferred_weight)
+        num_random = num_projections - num_preferred
+        orientations = generate_orientations(preferred_angles, angle_variation, num_preferred, num_random)
+
+    np.random.shuffle(orientations)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        futures = [executor.submit(generate_projection, angle, volume_data) for angle in orientations]
+        projections = [future.result() for future in futures]
+
+    return np.array(projections)
 
 def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons):
     """
@@ -1901,28 +2087,28 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
     Note: Gaussian noise is characteristic of the microscope & camera and is independent of the particles' signal.
     Particles that would extend past the edge of the large image are trimmed before being added.
 
-    :param numpy_array large_image: Shape of the large image.
-    :param numpy_array small_images: List of small images to place on the canvas.
+    :param numpy.ndarray large_image: Shape of the large image.
+    :param list_of_numpy.ndarray small_images: List of small images to place on the canvas.
     :param list_of_tuples particle_locations: Coordinates where each small image should be placed.
     :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
-    :return numpy_array: Collage of small images.
+    :return numpy.ndarray: Collage of small images.
     """
     print_and_log("", logging.DEBUG)
     collage = np.zeros(large_image.shape, dtype=large_image.dtype)
 
     for i, small_image in enumerate(small_images):
         x, y = particle_locations[i]
-        x_start = x - small_image.shape[0] // 2
-        y_start = y - small_image.shape[1] // 2
+        x_start = x - small_image.shape[1] // 2
+        y_start = y - small_image.shape[0] // 2
 
-        x_end = x_start + small_image.shape[0]
-        y_end = y_start + small_image.shape[1]
+        x_end = x_start + small_image.shape[1]
+        y_end = y_start + small_image.shape[0]
 
         # Calculate the region of the small image that fits within the large image
         x_start_trim = max(0, -x_start)
         y_start_trim = max(0, -y_start)
-        x_end_trim = min(small_image.shape[0], large_image.shape[1] - x_start)
-        y_end_trim = min(small_image.shape[1], large_image.shape[0] - y_start)
+        x_end_trim = min(small_image.shape[1], large_image.shape[1] - x_start)
+        y_end_trim = min(small_image.shape[0], large_image.shape[0] - y_start)
 
         # Adjust start and end coordinates to ensure they fall within the large image
         x_start = max(0, x_start)
@@ -1930,13 +2116,26 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
         x_end = min(large_image.shape[1], x_end)
         y_end = min(large_image.shape[0], y_end)
 
-        # Before adding, ensure the sizes match by explicitly setting the shape dimensions
-        trim_height, trim_width = y_end_trim - y_start_trim, x_end_trim - x_start_trim
+        # Ensure the sizes match by explicitly setting the shape dimensions
+        trim_height = min(y_end - y_start, y_end_trim - y_start_trim)
+        trim_width = min(x_end - x_start, x_end_trim - x_start_trim)
+        
+        # Adjust dimensions to match
         y_end = y_start + trim_height
         x_end = x_start + trim_width
+        y_end_trim = y_start_trim + trim_height
+        x_end_trim = x_start_trim + trim_width
 
-        # Add the trimmed small image to the collage
-        collage[y_start:y_end, x_start:x_end] += small_image[y_start_trim:y_end_trim, x_start_trim:x_end_trim]
+        # Ensure dimensions match before addition
+        collage_region = collage[y_start:y_end, x_start:x_end]
+        small_image_region = small_image[y_start_trim:y_end_trim, x_start_trim:x_end_trim]
+        
+        if collage_region.shape == small_image_region.shape:
+            collage[y_start:y_end, x_start:x_end] += small_image_region
+        else:
+            min_height = min(collage_region.shape[0], small_image_region.shape[0])
+            min_width = min(collage_region.shape[1], small_image_region.shape[1])
+            collage[y_start:y_start + min_height, x_start:x_start + min_width] += small_image_region[:min_height, :min_width]
 
     # Apply Gaussian noise across the entire collage to simulate the camera noise
     gaussian_noise = np.random.normal(loc=0, scale=np.sqrt(gaussian_variance), size=collage.shape)
@@ -2058,7 +2257,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
         if num_particles_removed > 0:
             print_and_log(f"{num_particles_removed} particles removed from coordinate file(s) due to being too close to the edge.", logging.INFO)
         else:
-            print_and_log("No particles removed from coordinate file(s) due to being too close to the edge.", logging.INFO)
+            print_and_log("0 particles removed from coordinate file(s) due to being too close to the edge.", logging.INFO)
 
         # Use the remaining locations for further processing
         filtered_particle_locations = remaining_particle_locations
@@ -2399,31 +2598,12 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         print_and_log(f"Done! {num_particles} particles will be added to the micrograph.\n", logging.INFO)
 
-        print_and_log(f"Projecting the structure volume {num_particles} times...", logging.INFO)
-        # Determine orientation generator arguments based on user input
-        if args.preferred_orientation:
-            # Define the orientation generator based on user input and set fixed Euler angle
-            orientgen_args = f"{args.orientgen_method}:n={num_particles}:phitoo={args.delta_angle}"
-            # Add condition for fixed Euler angle (90 degrees could be interpreted as preferring the X-Y plane, for example)
-            #if args.fixed_euler_angle == 90.0:
-                # This example assumes you want to restrict altitude; adjust as necessary
-                #orientgen_args += f":alt_min=89:alt_max=91"
-        else:
-            orientgen_args = f"rand:n={num_particles}:phitoo={args.phitoo}"
-
-        # Modify the e2project3d.py command to use the new orientgen_args
-        output = subprocess.run(["e2project3d.py", f"{structure_name}.mrc", f"--outfile=temp_{structure_name}.hdf", 
-                        f"--orientgen={orientgen_args}", f"--parallel=thread:{args.cpus}"], capture_output=True, text=True).stdout
-
-        #output = subprocess.run(["e2project3d.py", f"{structure_name}.mrc", f"--outfile=temp_{structure_name}.hdf", 
-        #                f"--orientgen=rand:n={num_particles}:phitoo={args.phitoo}", f"--parallel=thread:{args.cpus}"], capture_output=True, text=True).stdout
-        print_and_log(output, logging.INFO)
+        print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...", logging.INFO)
+        # Generate projections with the specified orientation mode
+        particles = generate_projections(structure_name, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus)
         print_and_log("Done!\n", logging.INFO)
 
-        output = subprocess.run(["e2proc2d.py", f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc"], capture_output=True, text=True).stdout
-        print_and_log(output, logging.INFO)
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
-        particles = readmrc(f"temp_{structure_name}.mrc")
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
         noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
         writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
@@ -2469,7 +2649,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
         # Cleanup
-        for temp_file in [f"temp_{structure_name}.hdf", f"temp_{structure_name}.mrc", f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"]:
+        for temp_file in [f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"]:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
@@ -2506,6 +2686,7 @@ def clean_up(args, structure_name):
 
     This function deletes several files.
     """
+    print_and_log("", logging.DEBUG)
     if args.binning > 1:
         if not args.keep:
             print_and_log("Removing non-downsamlpled micrographs...", logging.INFO)
