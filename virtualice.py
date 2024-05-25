@@ -49,6 +49,20 @@ from urllib import request, error
 from scipy.ndimage import affine_transform
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
+try:
+    import cupy as cp
+    import cupyx.scipy.ndimage as cupy_ndimage
+    import cupyx.scipy.fftpack as cupy_fftpack
+    gpu_available = True
+except ImportError:
+    import numpy as cp
+    import scipy.ndimage as scipy_ndimage
+    import scipy.fftpack as scipy_fftpack
+    gpu_available = False
+
+# Placeholder variables for the correct libraries to use
+ndimage = None
+fftpack = None
 
 # Suppress RuntimeWarnings raised by mrcfile for the entire script; sometimes it says filesize is unexpected
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
@@ -250,9 +264,11 @@ def parse_arguments(script_start_time):
 
     # System and Program Options
     misc_group = parser.add_argument_group('System and Program Options')
-    misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for micrograph generation. Each parallel process will use up to '--cpus' number of CPU cores for various steps. Default is %(default)s")
+    misc_group.add_argument("--use_cpu", action='store_true', default=False, help="Use CPU for processing instead of GPU. Default: Use GPUs if available")
+    misc_group.add_argument("-g", "--gpus", type=int, nargs='+', default=None, help="Specify which GPUs to use by their IDs for various processing steps: micrograph downsampling. Default: Use all available GPUs")
+    misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for each structure requested. Default is %(default)s")
     misc_group.add_argument("-pm", "--parallelize_micrographs", type=int, default=1, help="Number of parallel processes for generating each micrograph. Default is 1 (no parallelization)")
-    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to and dose damaging particle frames, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
+    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to and dose damaging particle frames, generating particle projections, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
     misc_group.add_argument("-V", "--verbosity", type=int, default=1, help="Set verbosity level: 0 (quiet), 1 (some output), 2 (verbose), 3 (debug). For 0-2, a log file will be additionally written with 2. For 3, a log file will be additionally written with 3. Default is %(default)s")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
@@ -281,6 +297,45 @@ def parse_arguments(script_start_time):
 
     # Setup logging based on the verbosity level
     setup_logging(script_start_time, args.verbosity)
+
+    # Determine if GPU should be used
+    args.use_gpu = not args.use_cpu and gpu_available
+
+    # Set the appropriate ndimage and fftpack libraries based on user choice
+    global ndimage, fftpack
+    if args.use_gpu:
+        ndimage = cupy_ndimage
+        fftpack = cupy_fftpack
+        args.gpu_ids = get_gpu_ids(args)
+        if not args.use_gpu:  # Check if get_gpu_ids returned nothing; fallback to CPUs
+            import numpy as cp
+            import scipy.ndimage as scipy_ndimage
+            import scipy.fftpack as scipy_fftpack
+            ndimage = scipy_ndimage
+            fftpack = scipy_fftpack
+            args.gpu_ids = None
+            print_and_log("GPUs or CuPy not configured properly. Falling back to CPUs for processing.", logging.INFO)
+        else:
+            #setup_gpu(args.gpu_ids)	
+            print_and_log(f"Using GPUs: {args.gpu_ids}", logging.DEBUG)
+    elif gpu_available and not args.use_gpu:
+        import numpy as cp
+        import scipy.ndimage as scipy_ndimage
+        import scipy.fftpack as scipy_fftpack
+        ndimage = scipy_ndimage
+        fftpack = scipy_fftpack
+        args.gpu_ids = None
+        print_and_log("Using only CPUs for processing.", logging.DEBUG)
+    elif args.use_gpu and not gpu_available:
+        ndimage = scipy_ndimage
+        fftpack = scipy_fftpack
+        args.gpu_ids = None
+        print_and_log("GPUs requested, but not available or CuPy not installed. Using only CPUs for processing.", logging.INFO)
+    else:
+        ndimage = scipy_ndimage
+        fftpack = scipy_fftpack
+        args.gpu_ids = None
+        print_and_log("Using only CPUs for processing.", logging.DEBUG)
 
     # Remove duplicate --structures
     args.structures = remove_duplicates_structures(args.structures)
@@ -425,6 +480,38 @@ def print_and_log(message, level=logging.INFO):
             # For print_and_log function calls, log only the primary message
             logger.log(level, message)
 
+def get_gpu_ids(args):
+    """
+    Determine which GPUs to use based on user input and GPU availability.
+
+    :param argparse.Namespace args: Parsed command-line arguments.
+    :return list_of_ints: List of GPU IDs to use.
+    """
+    print_and_log("", logging.DEBUG)
+    if args.use_cpu or not gpu_available:
+        return []
+    if args.gpus is None:
+        # Use all available GPUs (cp.cuda.runtime.getDeviceCount() breaks other cupy calls for some reason...)
+        output = subprocess.run(['nvidia-smi', '-L'], stdout=subprocess.PIPE, text=True)
+        gpu_count = len(output.stdout.strip().split('\n'))
+        if gpu_count == 0:
+            args.use_gpu = False  # Switch to False if no GPUs are found
+            return []
+        return list(range(gpu_count))
+    else:
+        # Use only specified GPUs
+        return args.gpus
+
+def setup_gpu(gpu_ids):
+    """
+    Set up the specified GPUs.
+
+    :param list_of_ints gpu_ids: List of GPU IDs to use.
+    """
+    print_and_log("", logging.DEBUG)
+    for gpu_id in gpu_ids:
+        cp.cuda.Device(gpu_id).use()
+
 def time_diff(time_diff):
     """
     Convert the time difference to a human-readable format.
@@ -525,7 +612,7 @@ def download_pdb(pdb_id, suppress_errors=False):
         with gzip.open(symmetrized_pdb_gz_path, 'rb') as f_in:
             with open(symmetrized_pdb_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
-        
+
         # Remove the .pdb1.gz file
         os.remove(symmetrized_pdb_gz_path)
         downloaded_any = True
@@ -1026,7 +1113,7 @@ def convert_point_to_model(point_file, output_file):
     """
     print_and_log("", logging.DEBUG)
     try:
-        # Run point2model command and give particles locations a circle of radius 3. Adjust the path if point2model is located elsewhere on your system.
+        # Run point2model command and give particles locations a circle of radius 3
         output = subprocess.run(["point2model", "-circle", "3", "-scat", point_file, output_file], capture_output=True, text=True, check=True)
         print_and_log(output, logging.INFO)
     except subprocess.CalledProcessError:
@@ -1093,7 +1180,6 @@ def save_particle_coordinates(structure_name, particle_locations, output_path, i
     if coord_coordinate_file:
         write_coord_file(particle_locations, os.path.splitext(output_path)[0] + ".coord")
 
-
 def estimate_mass_from_map(mrc_name):
     """
     Estimate the mass of a protein in a cryoEM density map.
@@ -1142,8 +1228,6 @@ def get_mrc_box_size(mrc_file_path):
 
     :param str mrc_file_path: The file path to the MRC file whose box size is to be determined.
     :return int: The size of one side of the cubic box in pixels.
-    :raises FileNotFoundError: If the specified MRC file does not exist.
-    :raises Exception: If there are issues reading the MRC file, indicating corruption or improper format.
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_file_path, permissive=True) as mrc:
@@ -1272,9 +1356,69 @@ def next_divisible_by_primes(number, primes, count):
     # Return the smallest number divisible by the combination of primes
     return min(least_common_multiples)
 
+def get_max_batch_size(image_size, free_mem):
+    """
+    Determine the maximum batch size based on available GPU VRAM.
+
+    :param int image_size: Size of a single image in bytes.
+    :param int free_mem: Free memory available on the GPU.
+    :return int: Maximum batch size that can fit in GPU memory.
+    """
+    # Leave some memory buffer (10% of total memory)
+    buffer_mem = free_mem * 0.1
+    available_mem = free_mem - buffer_mem
+
+    # Calculate the maximum number of images that fit in the available memory
+    max_batch_size = available_mem // image_size
+
+    # Ensure at least one image can be processed
+    return max(1, int(max_batch_size))
+
+def fourier_crop_gpu(image, downsample_factor):
+    """	
+    Fourier crops a 2D image using GPU.
+
+    :param cupy.ndarray image: Input 2D image to be Fourier cropped.
+    :param int downsample_factor: Factor by which to downsample the image in both dimensions.
+
+    :return cupy.ndarray: Fourier cropped image.
+    :raises ValueError: If input image is not 2D or if downsample factor is not valid.
+    """
+    print_and_log("", logging.DEBUG)
+    # Check if the input image is 2D
+    if image.ndim != 2:
+        raise ValueError("Input image must be 2D.")
+
+    # Check that the downsampling factor is positive
+    if downsample_factor <= 0 or not isinstance(downsample_factor, int):
+        raise ValueError("Downsample factor must be a positive integer.")
+
+    # Shift zero frequency component to center
+    f_transform = cp.fft.fft2(image)
+    f_transform_shifted = cp.fft.fftshift(f_transform)
+
+    # Compute indices to crop the Fourier Transform
+    center_x, center_y = cp.array(f_transform_shifted.shape) // 2
+    crop_x_start = center_x - image.shape[0] // (2 * downsample_factor)
+    crop_x_end = center_x + image.shape[0] // (2 * downsample_factor)
+    crop_y_start = center_y - image.shape[1] // (2 * downsample_factor)
+    crop_y_end = center_y + image.shape[1] // (2 * downsample_factor)
+
+    # Crop the Fourier Transform
+    f_transform_cropped = f_transform_shifted[crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+
+    # Inverse shift zero frequency component back to top-left
+    f_transform_cropped_unshifted = cp.fft.ifftshift(f_transform_cropped)
+
+    # Compute the Inverse Fourier Transform of the cropped Fourier Transform
+    image_cropped = cp.fft.ifft2(f_transform_cropped_unshifted)
+
+    # Take the real part of the result (to remove any imaginary components due to numerical errors)
+    return cp.real(image_cropped)
+
 def fourier_crop(image, downsample_factor):
     """	
-    Fourier crops a 2D image.
+    Fourier crops a 2D image by CPU.
 
     :param numpy.ndarray image: Input 2D image to be Fourier cropped.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
@@ -1317,13 +1461,14 @@ def fourier_crop(image, downsample_factor):
     # Take the real part of the result (to remove any imaginary components due to numerical errors)
     return np.real(image_cropped)
 
-def downsample_micrograph(image_path, downsample_factor):
+def downsample_micrograph(image_path, downsample_factor, use_gpu):
     """
     Downsample a micrograph by Fourier cropping and save it to a temporary directory.
     Supports mrc, png, and jpeg formats.
 
     :param str image_path: Path to the micrograph image file.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
+    :param bool use_gpu: Whether to use GPU for processing.
 
     This function writes a .mrc/.png/.jpeg file to the disk.
     """
@@ -1332,55 +1477,78 @@ def downsample_micrograph(image_path, downsample_factor):
         # Determine the file format
         filename = os.path.basename(image_path)
         name, ext = os.path.splitext(filename)
-        if ext == '.mrc':
-            image = readmrc(image_path)
-        elif ext in ['.png', '.jpeg']:
-            image = cv2.imread(image_path)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        image = readmrc(image_path)
 
         # Apply downsampling
-        downsampled_image = fourier_crop(image, downsample_factor)
+        if use_gpu:
+            image = cp.asarray(image)
+            downsampled_image = fourier_crop_gpu(image, downsample_factor)
+            downsampled_image = cp.asnumpy(downsampled_image)
+        else:
+            downsampled_image = fourier_crop(image, downsample_factor)
 
-        # Create a bin directory to store the downsampled micrograph
+        # Save the downsampled micrograph
         bin_dir = os.path.join(os.path.dirname(image_path), f"bin_{downsample_factor}")
         os.makedirs(bin_dir, exist_ok=True)
-
+        
         # Save the downsampled micrograph with the same name plus _bin## in the binned directory
         binned_image_path = os.path.join(bin_dir, f"{name}_bin{downsample_factor}{ext}")
         if ext == '.mrc':
-            writemrc(binned_image_path, ((downsampled_image - np.mean(downsampled_image)) / np.std(downsampled_image)))  # Save image with 0 mean and std of 1
-        elif ext in ['.png', '.jpeg']:
-            # Normalize image to [0, 255] and convert to uint8
-            downsampled_image -= downsampled_image.min()
-            downsampled_image = downsampled_image / downsampled_image.max() * 255.0
-            downsampled_image = downsampled_image.astype(np.uint8)
+            with mrcfile.new(binned_image_path, overwrite=True) as mrc:
+                mrc.set_data(downsampled_image.astype(np.float32))
+        else:  # ext == .png/.jpeg
             cv2.imwrite(binned_image_path, downsampled_image)
 
     except Exception as e:
         print_and_log(f"Error processing {image_path}: {str(e)}", logging.INFO)
 
-def parallel_downsample(image_directory, cpus, downsample_factor):
+def parallel_downsample(image_directory, cpus, downsample_factor, use_gpu, gpu_ids):
     """
     Downsample all micrographs in a directory in parallel.
 
     :param str image_directory: Local micrograph directory name with mrc/png/jpeg files.
     :param int downsample_factor: Factor by which to downsample the images in x,y.
+    :param bool use_gpu: Whether to use GPU for processing.
+    :param list gpu_ids: List of GPU IDs to use for processing.
     """
     print_and_log("", logging.DEBUG)
     image_extensions = ['.mrc', '.png', '.jpeg']
     image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
-    # Create a pool of worker processes
-    pool = Pool(processes=cpus)
+    if use_gpu:
+        image_size = readmrc(image_paths[0]).nbytes
+        batch_sizes = {}
 
-    # Downsample each micrograph by processing each image path in parallel
-    pool.starmap(downsample_micrograph, zip(image_paths, itertools.repeat(downsample_factor)))
+        # Determine batch size for each GPU based on its available memory
+        for gpu_id in gpu_ids:
+            with cp.cuda.Device(gpu_id):
+                free_mem, _ = cp.cuda.runtime.memGetInfo()
+                batch_size = get_max_batch_size(image_size, free_mem)
+                batch_sizes[gpu_id] = batch_size
 
-    # Close the pool to prevent any more tasks from being submitted
-    pool.close()
-
-    # Wait for all worker processes to finish
-    pool.join()
+        # Distribute and process images
+        start = 0
+        while start < len(image_paths):
+            for gpu_id, batch_size in batch_sizes.items():
+                end = start + batch_size
+                batch_paths = image_paths[start:end]
+                if not batch_paths:
+                    break
+                with cp.cuda.Device(gpu_id):
+                    for image_path in batch_paths:
+                        downsample_micrograph(image_path, downsample_factor, use_gpu)
+                start = end
+                if start >= len(image_paths):
+                    break
+    else:
+        # Create a pool of worker processes
+        pool = Pool(processes=cpus)
+        # Downsample each micrograph by processing each image path in parallel
+        pool.starmap(downsample_micrograph, [(image_path, downsample_factor, use_gpu) for image_path in image_paths])
+        # Close the pool to prevent any more tasks from being submitted
+        pool.close()
+        # Wait for all worker processes to finish
+        pool.join()
 
 def downsample_star_file(input_star, output_star, downsample_factor):
     """
@@ -2119,7 +2287,7 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
         # Ensure the sizes match by explicitly setting the shape dimensions
         trim_height = min(y_end - y_start, y_end_trim - y_start_trim)
         trim_width = min(x_end - x_start, x_end_trim - x_start_trim)
-        
+
         # Adjust dimensions to match
         y_end = y_start + trim_height
         x_end = x_start + trim_width
@@ -2129,7 +2297,7 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
         # Ensure dimensions match before addition
         collage_region = collage[y_start:y_end, x_start:x_end]
         small_image_region = small_image[y_start_trim:y_end_trim, x_start_trim:x_end_trim]
-        
+
         if collage_region.shape == small_image_region.shape:
             collage[y_start:y_end, x_start:x_end] += small_image_region
         else:
@@ -2657,7 +2825,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     if args.binning > 1:
         # Downsample micrographs
         print_and_log(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping...\n", logging.INFO)
-        parallel_downsample(f"{structure_name}/", args.cpus, args.binning)
+        parallel_downsample(f"{structure_name}/", args.cpus, args.binning, args.use_gpu, args.gpu_ids)
 
         # Downsample coordinate files
         downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
