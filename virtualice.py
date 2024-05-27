@@ -1191,7 +1191,7 @@ def estimate_mass_from_map(mrc_name):
     present in a cryoEM density map (MRC/MAP file) and the provided pixel size.
     It assumes an average protein density of 1.35 g/cm³ and uses the volume of
     voxels above a certain threshold to represent the protein. The threshold is set
-    as the mean plus 1 standard deviation of the density values in the map. This
+    as the mean plus 2 standard deviation of the density values in the map. This
     is a simplistic thresholding approach and might need adjustment based on the
     specific map and protein.
 
@@ -1206,12 +1206,11 @@ def estimate_mass_from_map(mrc_name):
     protein_density_g_per_cm3 = 1.35  # Average density of protein
     angstroms_cubed_to_cm_cubed = 1e-24  # Conversion factor
 
-    mrc_path = f"{mrc_name}.mrc"
-    with mrcfile.open(mrc_path, mode='r') as mrc:
+    with mrcfile.open(f"{mrc_name}.mrc", mode='r') as mrc:
         data = mrc.data
-        pixel_size_angstroms = mrc.voxel_size.x  # Assuming cubic voxels; adjust if necessary
-        # Example threshold; customize as needed
-        threshold = data.mean() + data.std()
+        pixel_size_angstroms = mrc.voxel_size.x  # Assuming cubic voxels
+        # 2 Standard deviations gave a reasonable fit for 10 random EMDB entries. It's not very reliable, though
+        threshold = data.mean() + 2 * data.std()
         voxel_volume_angstroms_cubed = pixel_size_angstroms**3
         protein_volume_angstroms_cubed = np.sum(data > threshold) * voxel_volume_angstroms_cubed
         protein_volume_cm_cubed = protein_volume_angstroms_cubed * angstroms_cubed_to_cm_cubed
