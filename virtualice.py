@@ -27,6 +27,7 @@ __version__ = "1.0.0"
 import os
 import re
 import cv2
+import sys
 import glob
 import gzip
 import json
@@ -182,27 +183,27 @@ def parse_arguments(script_start_time):
     :param str script_start_time: Function start time, formatted as a string
     :returns argparse.Namespace: An object containing attributes for each command-line argument.
     """
-    parser = argparse.ArgumentParser(description="VirtualIce: A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons at junk/substrate locations are projected but not written to coordinate files.",
+    parser = argparse.ArgumentParser(description="\033[1mVirtualIce:\033[0m A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons at junk/substrate locations are projected but not written to coordinate files.",
     epilog="""
-    Examples:
-      1. Basic usage: virtualice.py -s 1TIM -n 10
-         Generates 10 random micrographs of PDB 1TIM.
+\033[1mExamples:\033[0m
+  1. Basic usage: virtualice.py -s 1TIM -n 10
+     Generates 10 random micrographs of PDB 1TIM.
 
-      2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2 -C
-         Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
-         Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
-         Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
+  2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2 -C
+     Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
+     Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
+     Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
     """,
     formatter_class=argparse.RawDescriptionHelpFormatter)  # Preserves whitespace for better formatting
 
     # Input Options
-    input_group = parser.add_argument_group('Input Options')
+    input_group = parser.add_argument_group('\033[1mInput Options\033[0m')
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
     input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
 
     # Particle and Micrograph Generation Options
-    particle_micrograph_group = parser.add_argument_group('Particle and Micrograph Generation Options')
+    particle_micrograph_group = parser.add_argument_group('\033[1mParticle and Micrograph Generation Options\033[0m')
     particle_micrograph_group.add_argument("-n", "--num_images", type=int, default=5, help="Number of micrographs to create for each structure requested. Default is %(default)s")
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size (in Angstroms) of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
@@ -218,7 +219,7 @@ def parse_arguments(script_start_time):
     #particle_micrograph_group.add_argument("-sb", "--save_border", type=int, default=None, help="Minimum distance from the image border required to save a particle's coordinates to the output files. Default is %(default)s, which will use the value of --border if specified, otherwise half of the particle box size.")
 
     # Simulation Options
-    simulation_group = parser.add_argument_group('Simulation Options')
+    simulation_group = parser.add_argument_group('\033[1mSimulation Options\033[0m')
     simulation_group.add_argument("--dose_damage", type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015. Default is %(default)s")
     simulation_group.add_argument("--dose_a", type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
@@ -236,7 +237,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
     # Junk Labels Options
-    junk_labels_group = parser.add_argument_group('Junk Labels Options')
+    junk_labels_group = parser.add_argument_group('\033[1mJunk Labels Options\033[0m')
     junk_labels_group.add_argument("-nj", "--no_junk_filter", action="store_true", help="Turn off junk filtering; i.e. Do not remove particles from coordinate files that are on/near junk or substrate.")
     junk_labels_group.add_argument("-S", "--json_scale", type=int, default=4, help="Binning factor used when labeling junk to create the JSON files with AnyLabeling. Default is %(default)s")
     junk_labels_group.add_argument("-x", "--flip_x", action="store_true", help="Flip the polygons that identify junk along the x-axis")
@@ -244,13 +245,13 @@ def parse_arguments(script_start_time):
     junk_labels_group.add_argument("-pe", "--polygon_expansion_distance", type=int, default=5, help="Number of pixels to expand each polygon in the JSON file that defines areas to not place particle coordinates. The size of the pixels used here is the same size as the pixels that the JSON file uses (ie. the binning used when labeling the micrographs in AnyLabeling). Default is %(default)s")
 
     # Particle Cropping Options
-    particle_cropping_group = parser.add_argument_group('Particle Cropping Options')
+    particle_cropping_group = parser.add_argument_group('\033[1mParticle Cropping Options\033[0m')
     particle_cropping_group.add_argument("-C", "--crop_particles", action="store_true", help="Enable cropping of particles from micrographs. Particles will be extracted to the [structure_name]/Particles/ directory as .mrc files. Default is no cropping.")
     particle_cropping_group.add_argument("-CM", "--max_crop_particles", type=int, default=None, help="Maximum number of particles to crop from micrographs.")
     particle_cropping_group.add_argument("-X", "--box_size", type=int, default=None, help="Box size for cropped particles (x and y dimensions are the same). Particles with box sizes that fall outside the micrograph will not be cropped. Default is the size of the mrc used for particle projection after internal preprocessing.")
 
     # Micrograph and Coordinate Output Options
-    output_group = parser.add_argument_group('Micrograph and Coordinate Output Options')
+    output_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
     output_group.add_argument("-o", "--output_directory", type=str, help="Directory to save all output files. If not specified, a unique directory will be created.")
     output_group.add_argument("--mrc", action="store_true", default=True, help="Save micrographs as .mrc (default if no format is specified)")
     output_group.add_argument("--no_mrc", dest="mrc", action="store_false", help="Do not save micrographs as .mrc")
@@ -263,7 +264,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
 
     # System and Program Options
-    misc_group = parser.add_argument_group('System and Program Options')
+    misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
     misc_group.add_argument("--use_cpu", action='store_true', default=False, help="Use CPU for processing instead of GPU. Default: Use GPUs if available")
     misc_group.add_argument("-g", "--gpus", type=int, nargs='+', default=None, help="Specify which GPUs to use by their IDs for various processing steps: micrograph downsampling. Default: Use all available GPUs")
     misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for each structure requested. Default is %(default)s")
@@ -390,6 +391,7 @@ def parse_arguments(script_start_time):
 
     print_and_log(f"\033[1m{'-' * 80}\n{('VirtualIce Run Configuration').center(80)}\n{'-' * 80}\033[0m", logging.WARNING)
     print_and_log(textwrap.fill(f"Generating {args.num_images} synthetic micrograph{'' if args.num_images == 1 else 's'} per structure ({', '.join(args.structures)}) using micrographs in {args.image_directory.rstrip('/')}/", width=80), logging.WARNING)
+    print_and_log(f"\nInput command: {' '.join(sys.argv)}", logging.DEBUG)
     print_and_log("\nInput arguments:\n", logging.WARNING)
     print_and_log(argument_printout, logging.WARNING)
     print_and_log(f"\033[1m{'-' * 80}\033[0m\n", logging.WARNING)
