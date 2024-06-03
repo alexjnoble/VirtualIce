@@ -47,6 +47,7 @@ import pandas as pd
 import SimpleITK as sitk
 from multiprocessing import Pool
 from urllib import request, error
+from xml.etree import ElementTree as ET
 from scipy.ndimage import affine_transform
 from concurrent.futures import ProcessPoolExecutor
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
@@ -220,10 +221,10 @@ def parse_arguments(script_start_time):
 
     # Simulation Options
     simulation_group = parser.add_argument_group('\033[1mSimulation Options\033[0m')
-    simulation_group.add_argument("--dose_damage", type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015. Default is %(default)s")
-    simulation_group.add_argument("--dose_a", type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
-    simulation_group.add_argument("--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
-    simulation_group.add_argument("--dose_c", type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("-dd", "--dose_damage", type=str, choices=['None', 'Light', 'Moderate', 'Heavy', 'Custom'], default='Moderate', help="Simulated protein damage due to accumulated dose, applied to simulated particle frames. Uses equation given by Grant & Grigorieff, 2015. Default is %(default)s")
+    simulation_group.add_argument("-da", "--dose_a", type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("-db", "--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("-dc", "--dose_c", type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
@@ -233,7 +234,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.8, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
     simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
     simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
-    simulation_group.add_argument("--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
+    simulation_group.add_argument("-cs", "--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
     simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
 
     # Junk Labels Options
@@ -585,11 +586,34 @@ def is_pdb_id(structure_input):
     # PDB ID must be 4 characters: first character is a number, next 3 are alphanumeric, and there must be at least one letter
     return bool(re.match(r'^[0-9][A-Za-z0-9]{3}$', structure_input) and any(char.isalpha() for char in structure_input))
 
+def get_pdb_sample_name(pdb_id):
+    """
+    Retrieves the sample name for a given PDB ID from the RCSB database.
+
+    :param str pdb_id: The PDB ID to query (e.g., '1ABC').
+    :raises requests.HTTPError: If the request to the RCSB API fails.
+    :raises json.JSONDecodeError: If the response from the RCSB API is not valid JSON.
+    :returns str: The sample name associated with the PDB ID, or an error message.
+    """
+    print_and_log("", logging.DEBUG)
+    url = f'https://data.rcsb.org/rest/v1/core/entry/{pdb_id}'
+    try:
+        with request.urlopen(url) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode())
+                sample_name = data.get('struct', {}).get('title', 'Sample name not found')
+                return sample_name
+            else:
+                return 'Invalid PDB ID or network error'
+    except Exception as e:
+        return f'An error occurred: {e}'
+
 def download_pdb(pdb_id, suppress_errors=False):
     """
-    Download a PDB file from the RCSB website.
+    Download a PDB file from the RCSB website and print the sample name.
     Attempts to download the symmetrized .pdb1.gz file first.
     If the .pdb1.gz file is not available, download the regular PDB file.
+    If both are available, get the larger one (sometimes entries have the symmetrized pdb as the regular file).
 
     :param str pdb_id: The ID of the PDB to be downloaded.
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
@@ -604,6 +628,7 @@ def download_pdb(pdb_id, suppress_errors=False):
     symmetrized_pdb_path = f"{pdb_id}.pdb1"
     regular_pdb_path = f"{pdb_id}.pdb"
     downloaded_any = False
+
     if not suppress_errors:
         print_and_log(f"Downloading PDB {pdb_id}...", logging.INFO)
 
@@ -619,7 +644,7 @@ def download_pdb(pdb_id, suppress_errors=False):
         os.remove(symmetrized_pdb_gz_path)
         downloaded_any = True
     except:
-    	pass
+        pass
 
     try:  # Try downloading the regular .pdb file
         request.urlretrieve(regular_url, regular_pdb_path)
@@ -639,14 +664,17 @@ def download_pdb(pdb_id, suppress_errors=False):
     # Determine the largest .pdb file and remove the other one if both exist
     if os.path.exists(regular_pdb_path) and os.path.exists(symmetrized_pdb_path):
         if os.path.getsize(symmetrized_pdb_path) > os.path.getsize(regular_pdb_path):
-            print_and_log(f"Downloaded symmetrized PDB {pdb_id}\n", logging.INFO)
+            print_and_log(f"Downloaded symmetrized PDB {pdb_id}", logging.INFO)
             os.remove(regular_pdb_path)
             os.rename(symmetrized_pdb_path, regular_pdb_path)
         else:
-            print_and_log(f"Downloaded PDB {pdb_id}\n", logging.INFO)
+            print_and_log(f"Downloaded PDB {pdb_id}", logging.INFO)
             os.remove(symmetrized_pdb_path)
     elif os.path.exists(symmetrized_pdb_path):
         os.rename(symmetrized_pdb_path, regular_pdb_path)
+
+    sample_name = get_pdb_sample_name(pdb_id)
+    print_and_log(f"Sample name: {sample_name}\n", logging.INFO)
 
     return True
 
@@ -671,6 +699,25 @@ def download_random_pdb():
         if success:
             return pdb_id
         # No need to explicitly handle failure; loop continues until a successful download occurs
+
+def get_emdb_sample_name(emd_number):
+    """
+    Retrieves the name of the EMDB entry given its EMD number.
+
+    :param str emd_number: The EMD number (e.g., '10025').
+    :raises requests.HTTPError: If the request to the EMDB API fails.
+    :raises xml.etree.ElementTree.ParseError: If the response from the EMDB API is not valid XML.
+    :returns str: The name of the EMDB entry, or None if not found.
+    """
+    print_and_log("", logging.DEBUG)
+    url = f"https://ftp.ebi.ac.uk/pub/databases/emdb/structures/EMD-{emd_number}/header/emd-{emd_number}-v30.xml"
+    try:
+        with request.urlopen(url) as response:
+            root = ET.fromstring(response.read())
+            return root.find('.//title').text if root.find('.//title') is not None else None
+    except request.HTTPError as e:
+        print_and_log("Error fetching sample name", logging.DEBUG)
+        return None
 
 def download_emdb(emdb_id, suppress_errors=False):
     """
@@ -700,8 +747,9 @@ def download_emdb(emdb_id, suppress_errors=False):
         # Remove the compressed file after decompression
         os.remove(local_filename)
 
-        if not suppress_errors:
-            print_and_log(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
+        print_and_log(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
+        sample_name = get_emdb_sample_name(emdb_id)
+        print_and_log(f"Sample name: {sample_name}\n", logging.INFO)
         return True
     except error.HTTPError as e:
         if not suppress_errors:
@@ -721,10 +769,9 @@ def download_random_emdb():
     print_and_log("", logging.DEBUG)
     while True:
         # Generate a random EMDB ID within a reasonable range
-        emdb_id = str(random.randint(1, 43542)).zfill(4)  # Makes a 4 or 5 digit number with leading zeros. Random 1-3 digits will also be 4 digit.
+        emdb_id = str(random.randint(1, 45000)).zfill(4)  # Makes a 4 or 5 digit number with leading zeros. Random 1-3 digits will also be 4 digit.
         success = download_emdb(emdb_id, suppress_errors=True)
         if success:
-            print_and_log(f"Download and decompression complete for EMD-{emdb_id}.", logging.INFO)
             return emdb_id
 
 def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
@@ -1491,7 +1538,7 @@ def downsample_micrograph(image_path, downsample_factor, use_gpu):
         # Save the downsampled micrograph
         bin_dir = os.path.join(os.path.dirname(image_path), f"bin_{downsample_factor}")
         os.makedirs(bin_dir, exist_ok=True)
-        
+
         # Save the downsampled micrograph with the same name plus _bin## in the binned directory
         binned_image_path = os.path.join(bin_dir, f"{name}_bin{downsample_factor}{ext}")
         if ext == '.mrc':
@@ -2677,6 +2724,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         fudge_factor = 4.8  # Note: larger number = darker particles
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
+        #reorient_mrc(f'{structure_name}.mrc', f'{structure_name}.mrc')  # It's very slow for EMDB maps...
         print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
         fudge_factor = 2.8
 
