@@ -1645,6 +1645,8 @@ def downsample_star_file(input_star, output_star, downsample_factor):
             # If in data_particles block and line contains coordinate data, modify it
             if in_data_particles_block and line.strip() and not line.startswith(('data_', 'loop_', '_')):
                 parts = line.split()
+                # Update micrograph name to include _bin##.mrc suffix
+                parts[0] = f"{parts[0].replace('.mrc', '')}_bin{downsample_factor}.mrc"
                 # Assuming coordinates are in the second and third column (index 1 and 2)
                 parts[1] = str(float(parts[1]) / downsample_factor)  # Downsample x coordinate
                 parts[2] = str(float(parts[2]) / downsample_factor)  # Downsample y coordinate
