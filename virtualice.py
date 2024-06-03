@@ -202,6 +202,7 @@ def parse_arguments(script_start_time):
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
     input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
+    input_group.add_argument("-me", "--max_emdb_size", type=float, default=512, help="The maximum allowed file size in megabytes. Default is %(default)s")
 
     # Particle and Micrograph Generation Options
     particle_micrograph_group = parser.add_argument_group('\033[1mParticle and Micrograph Generation Options\033[0m')
@@ -228,6 +229,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
+    simulation_group.add_argument("-ro", "--reorient_mrc", action="store_true", help="Reorient the MRC file (either provided as a .mrc file or requested from EMDB) so that the structure's principal axes align with the coordinate axes. Note: .pdb files are automatically reoriented, EMDB files are often too big to do so quickly. Default is %(default)s")
     simulation_group.add_argument("-om", "--orientation_mode", type=str, choices=['random', 'uniform', 'preferred'], default='random', help="Orientation mode for projections. Options are: random, uniform, preferred. Default is %(default)s")
     simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90, 0, 0]' or '[*, 0, 90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
     simulation_group.add_argument("-av", "--angle_variation", type=float, default=5.0, help="Standard deviation for normal distribution of variations around preferred angles (in degrees). Default is %(default)s")
@@ -286,6 +288,9 @@ def parse_arguments(script_start_time):
     # Make local paths absolute
     args.image_list_file = os.path.abspath(args.image_list_file)
     args.image_directory = os.path.abspath(args.image_directory)
+
+    # Convert megabytes to bytes
+    args.max_emdb_size = args.max_emdb_size * 1024 * 1024
 
     # Determine output directory
     if not args.output_directory:
@@ -719,11 +724,12 @@ def get_emdb_sample_name(emd_number):
         print_and_log("Error fetching sample name", logging.DEBUG)
         return None
 
-def download_emdb(emdb_id, suppress_errors=False):
+def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
     """
     Download and decompress an EMDB map file using urllib.
 
     :param str emdb_id: The ID of the EMDB map to be downloaded.
+    :param int max_emdb_size: The maximum allowed file size in bytes.
     :param bool suppress_errors: If True, suppress error messages. Useful for random PDB downloads.
     :return bool: True if the map exists and is downloaded, False if not.
 
@@ -734,6 +740,15 @@ def download_emdb(emdb_id, suppress_errors=False):
     local_filename = f"emd_{emdb_id}.map.gz"
 
     try:
+        # Check the file size before downloading
+        req = request.Request(url, method='HEAD')
+        with request.urlopen(req) as response:
+            file_size = int(response.headers.get('Content-Length', 0))
+            if file_size > max_emdb_size:
+                if not suppress_errors:
+                    print_and_log(f"EMD-{emdb_id} file size ({file_size / (1024 * 1024):.2f} MB) exceeds the maximum allowed size ({max_emdb_size / (1024 * 1024):.2f} MB). Use the --max_emdb_size flag if you want to use this EMDB entry.", logging.WARNING)
+                return False
+
         # Download the gzipped map file
         if not suppress_errors:
             print_and_log(f"Downloading EMD-{emdb_id}...", logging.INFO)
@@ -760,21 +775,22 @@ def download_emdb(emdb_id, suppress_errors=False):
             print_and_log(f"An unexpected error occurred while downloading EMD-{emdb_id}. Error: {e}", logging.WARNING)
         return False
 
-def download_random_emdb():
+def download_random_emdb(max_emdb_size):
     """
     Download a random EMDB map by trying random IDs with urllib.
 
+    :param int max_emdb_size: The maximum allowed file size in bytes.
     :return str: The ID of the EMDB map if downloaded successfully, otherwise False.
     """
     print_and_log("", logging.DEBUG)
     while True:
         # Generate a random EMDB ID within a reasonable range
         emdb_id = str(random.randint(1, 45000)).zfill(4)  # Makes a 4 or 5 digit number with leading zeros. Random 1-3 digits will also be 4 digit.
-        success = download_emdb(emdb_id, suppress_errors=True)
+        success = download_emdb(emdb_id, max_emdb_size, suppress_errors=True)
         if success:
             return emdb_id
 
-def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
+def process_structure_input(structure_input, max_emdb_size, std_devs_above_mean, pixelsize):
     """
     Process each structure input by identifying whether it's a PDB ID for
     download, EMDB ID for download, a local file path, or a request for a random
@@ -805,9 +821,9 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
         pdb_id = download_random_pdb()
         return (pdb_id, "pdb") if pdb_id else None
 
-    def download_random_emdb_structure():
+    def download_random_emdb_structure(max_emdb_size):
         print_and_log("Downloading a random EMDB map...", logging.INFO)
-        emdb_id = download_random_emdb()
+        emdb_id = download_random_emdb(max_emdb_size)
         structure_input = f"emd_{emdb_id}.map"
         return process_local_mrc_file(structure_input) if emdb_id else None
 
@@ -815,11 +831,11 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
         if random.choice(["pdb", "emdb"]) == "pdb":
             return download_random_pdb_structure()
         else:
-            return download_random_emdb_structure()
+            return download_random_emdb_structure(max_emdb_size)
     elif structure_input.lower() == 'rp':
         return download_random_pdb_structure()
     elif structure_input.lower() == 're' or structure_input.lower() == 'rm':
-        return download_random_emdb_structure()
+        return download_random_emdb_structure(max_emdb_size)
     elif is_local_pdb_path(structure_input):
         print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
@@ -833,7 +849,7 @@ def process_structure_input(structure_input, std_devs_above_mean, pixelsize):
         shutil.copy(full_path, os.path.basename(structure_input))
         return process_local_mrc_file(structure_input)
     elif is_emdb_id(structure_input):
-        if download_emdb(structure_input):
+        if download_emdb(structure_input, max_emdb_size):
             structure_input = f"emd_{structure_input}.map"
             return process_local_mrc_file(structure_input)
         else:
@@ -2724,7 +2740,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         fudge_factor = 4.8  # Note: larger number = darker particles
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
-        #reorient_mrc(f'{structure_name}.mrc', f'{structure_name}.mrc')  # It's very slow for EMDB maps...
+        if args.reorient_mrc:
+            reorient_mrc(f'{structure_name}.mrc', f'{structure_name}.mrc')  # It's very slow for EMDB maps...
         print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa", logging.INFO)
         fudge_factor = 2.8
 
@@ -2996,7 +3013,7 @@ def main():
         # Prepare a list of tasks
         tasks = []
         for structure_index, structure_input in enumerate(args.structures):
-            result = process_structure_input(structure_input, args.std_threshold, args.apix)
+            result = process_structure_input(structure_input, args.max_emdb_size, args.std_threshold, args.apix)
             if result:  # Check if result is not None
                 structure_name, structure_type = result  # Now we're sure structure_name and structure_type are valid
                 # Submit each task for execution
