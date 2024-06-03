@@ -1148,24 +1148,28 @@ def write_star_header(file_basename, apix, voltage, cs):
         star_file.write('_rlnCoordinateX #2\n')
         star_file.write('_rlnCoordinateY #3\n')
         star_file.write('_rlnAnglePsi #4\n')
-        star_file.write('_rlnOpticsGroup #5\n')
+        star_file.write('_rlnAngleRot #5\n')
+        star_file.write('_rlnAngleTilt #6\n')
+        star_file.write('_rlnOpticsGroup #7\n')
 
-def write_all_coordinates_to_star(structure_name, image_path, particle_locations):
+def write_all_coordinates_to_star(structure_name, image_path, particle_locations, orientations):
     """
     Write all particle locations to a STAR file.
 
     :param str structure_name: The name of the structure file.
     :param str image_path: The path of the image to add.
     :param list_of_tuples particle_locations: A list of tuples; each tuple contains the x, y coordinates.
+    :param list_of_tuples orientations: List of orientations as tuples of three Euler angles (alpha, beta, gamma) in degrees.
 
     This function appends particle locations to a .star file on the disk, along with the image_path.
     """
     print_and_log("", logging.DEBUG)
     # Open the star file once and write all coordinates
     with open(f'{structure_name}.star', 'a') as star_file:
-        for location in particle_locations:
+        for location, orientation in zip(particle_locations, orientations):
             x_shift, y_shift = location
-            star_file.write(f'{image_path} {x_shift} {y_shift} 0 1\n')
+            alpha, beta, gamma = orientation
+            star_file.write(f'{image_path} {x_shift} {y_shift} {alpha} {beta} {gamma} 1\n')
 
 def convert_point_to_model(point_file, output_file):
     """
@@ -1220,11 +1224,14 @@ def write_coord_file(coordinates, output_file):
         for x, y in coordinates:
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
 
-def save_particle_coordinates(structure_name, particle_locations, output_path, imod_coordinate_file, coord_coordinate_file):
+def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file):
     """
     Saves particle coordinates in specified formats (.star, .mod, .coord).
 
     :param str structure_name: Base name for the output files.
+    :param list_of_tuples particle_locations_with_orientations: List of tuples where each tuple contains:
+        - tuple 1: The (x, y) coordinates of the particle.
+        - tuple 2: The (alpha, beta, gamma) Euler angles representing the orientation of the particle.
     :param list particle_locations: List of particle locations as (x, y) tuples.
     :param Namespace args: Command-line arguments containing user preferences for file outputs.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
@@ -1233,8 +1240,10 @@ def save_particle_coordinates(structure_name, particle_locations, output_path, i
     This function writes a .star file and optionally a .mod and .coord file.
     """
     print_and_log("", logging.DEBUG)
+    filtered_particle_locations = [loc for loc, ori in particle_locations_with_orientations]
+    orientations = [ori for loc, ori in particle_locations_with_orientations]
     # Save .star file
-    write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations)
+    write_all_coordinates_to_star(structure_name, output_path + ".mrc", filtered_particle_locations, orientations)
 
     # Save IMOD .mod files
     if imod_coordinate_file:
@@ -1962,7 +1971,7 @@ def generate_projections(structure_name, num_projections, orientation_mode, pref
     :param float angle_variation: Standard deviation for normal distribution of variations around preferred angles, optional.
     :param float preferred_weight: Weight of the preferred orientations in the range [0, 1], optional.
     :param int num_cores: Number of CPU cores to use for parallel processing, optional.
-    :return numpy.ndarray: Array of generated projections.
+    :return numpy.ndarray list_of_tuples: Array of generated projections, and list of orientations as tuples of three Euler angles (alpha, beta, gamma) in degrees.
     """
     print_and_log("", logging.DEBUG)
     projections = []
@@ -1987,7 +1996,7 @@ def generate_projections(structure_name, num_projections, orientation_mode, pref
         futures = [executor.submit(generate_projection, angle, volume_data) for angle in orientations]
         projections = [future.result() for future in futures]
 
-    return np.array(projections)
+    return np.array(projections), orientations
 
 def filter_coordinates_outside_polygons(particle_locations, json_scale, polygons):
     """
@@ -2420,6 +2429,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     num_small_images = input_options['num_small_images']
     half_small_image_width = input_options['half_small_image_width']
     prob_map = input_options['prob_map']
+    orientations = input_options['orientations']
 
     # Extract particle and micrograph generation options
     scale_percent = particle_and_micrograph_generation_options['scale_percent']
@@ -2508,7 +2518,10 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     # Normalize the resulting micrograph to itself
     blended_image = (blended_image - blended_image.mean()) / blended_image.std()
 
-    save_particle_coordinates(structure_name, filtered_particle_locations, output_path, imod_coordinate_file, coord_coordinate_file)
+    # Combine filtered_particle_locations with orientations for easier passing
+    filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations) if loc in filtered_particle_locations]
+    
+    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file)
 
     return blended_image, filtered_particle_locations
 
@@ -2549,6 +2562,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     large_image_path = input_options['large_image_path']
     small_images = input_options['small_images']
     structure_name = input_options['structure_name']
+    orientations = input_options['orientations']
 
     # Extract particle and micrograph generation options
     scale_percent = particle_and_micrograph_generation_options['scale_percent']
@@ -2597,7 +2611,8 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
         'image_size': image_size,
         'num_small_images': num_small_images,
         'half_small_image_width': half_small_image_width,
-        'prob_map': prob_map }
+        'prob_map': prob_map,
+        'orientations': orientations }
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
@@ -2834,7 +2849,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...", logging.INFO)
         # Generate projections with the specified orientation mode
-        particles = generate_projections(structure_name, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus)
+        particles, orientations = generate_projections(structure_name, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus)
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
@@ -2855,7 +2870,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
             'small_images': f"temp_{structure_name}_noise_CTF.mrc",
-            'structure_name': structure_name }
+            'structure_name': structure_name,
+            'orientations': orientations }
         particle_and_micrograph_generation_options = { 'scale_percent': args.scale_percent,
             'dist_type': dist_type,
             'non_random_dist_type': non_random_dist_type,
