@@ -707,7 +707,8 @@ def download_random_pdb():
 
 def get_emdb_sample_name(emd_number):
     """
-    Retrieves the name of the EMDB entry given its EMD number.
+    Retrieves the name of the EMDB entry given its EMD number,
+    prioritizing the 'sample' name and falling back to the 'title' name.
 
     :param str emd_number: The EMD number (e.g., '10025').
     :raises requests.HTTPError: If the request to the EMDB API fails.
@@ -718,11 +719,23 @@ def get_emdb_sample_name(emd_number):
     url = f"https://ftp.ebi.ac.uk/pub/databases/emdb/structures/EMD-{emd_number}/header/emd-{emd_number}-v30.xml"
     try:
         with request.urlopen(url) as response:
-            root = ET.fromstring(response.read())
-            return root.find('.//title').text if root.find('.//title') is not None else None
-    except request.HTTPError as e:
-        print_and_log("Error fetching sample name", logging.DEBUG)
+            if response.status == 200:
+                root = ET.fromstring(response.read())
+                sample_name = root.find('.//sample/name')
+                if sample_name is not None:
+                    return sample_name.text
+                else:
+                    title_name = root.find('.//title')
+                    return title_name.text if title_name is not None else None
+            else:
+                return None  # XML file not found or error
+    except Exception as e:
+        print_and_log(f"Error fetching XML data: {e}", logging.DEBUG)
         return None
+    except request.HTTPError as e:
+        print_and_log(f"HTTP Error fetching XML data: {e}", logging.DEBUG)
+        return None
+
 
 def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
     """
