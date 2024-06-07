@@ -43,6 +43,7 @@ import warnings
 import itertools
 import subprocess
 import numpy as np
+from EMAN2 import *
 import pandas as pd
 import SimpleITK as sitk
 from multiprocessing import Pool
@@ -607,7 +608,7 @@ def get_pdb_sample_name(pdb_id):
             if response.status == 200:
                 data = json.loads(response.read().decode())
                 sample_name = data.get('struct', {}).get('title', 'Sample name not found')
-                return sample_name
+                return sample_name.title()
             else:
                 return 'Invalid PDB ID or network error'
     except Exception as e:
@@ -723,10 +724,10 @@ def get_emdb_sample_name(emd_number):
                 root = ET.fromstring(response.read())
                 sample_name = root.find('.//sample/name')
                 if sample_name is not None:
-                    return sample_name.text
+                    return sample_name.text.title()
                 else:
-                    title_name = root.find('.//title')
-                    return title_name.text if title_name is not None else None
+                    sample_name = root.find('.//title')
+                    return sample_name.text.title() if sample_name is not None else None
             else:
                 return None  # XML file not found or error
     except Exception as e:
@@ -2336,6 +2337,51 @@ def add_poisson_noise(particle_stack, num_frames, dose_a, dose_b, dose_c, apix, 
 
     return noisy_particle_stack
 
+def apply_ctf_with_eman2(particle, defocus, params):
+    """
+    Apply CTF to a particle with EMAN2.
+
+    :param tuple params: Tuple containing (ampcont, bfactor, apix, cs, voltage)
+    :param numpy.ndarray particle: The particle to be processed
+    :param float defocus: Defocus value for CTF simulation
+    :return numpy.ndarray: Processed particle as a float32 NumPy array
+    """
+    print_and_log("", logging.DEBUG)
+    ampcont, bfactor, apix, cs, voltage = params
+    input_particle = EMNumPy.numpy2em(particle)
+
+    # Apply CTF simulation, multiply by -1, and normalize
+    ctf_params = {"ampcont": ampcont, "bfactor": bfactor, "apix": apix, "cs": cs, "defocus": defocus, "voltage": voltage}
+    input_particle.process_inplace("math.simulatectf", ctf_params)
+    input_particle.mult(-1)
+    input_particle.process_inplace("normalize.edgemean")
+
+    # Convert the processed EMData object back to a NumPy array and cast to float32
+    particle_CTF = EMNumPy.em2numpy(input_particle).astype(np.float32)
+    return particle_CTF
+
+def apply_ctfs_with_eman2(particles, defocuses, ampcont, bfactor, apix, cs, voltage, num_workers):
+    """
+    Apply CTF to a stack of particles using EMAN2 (parallelized).
+
+    :param numpy.ndarray particles: Stack of particles to be processed
+    :param list defocuses: List of defocus values, one for each particle in the stack
+    :param float ampcont: Amplitude contrast for CTF simulation
+    :param float bfactor: B-factor for CTF simulation
+    :param float apix: Pixel size for CTF simulation
+    :param float cs: Spherical aberration for CTF simulation
+    :param float voltage: Voltage for CTF simulation
+    :param int num_workers: Number of CPU cores to use for parallel processing
+    :return numpy.ndarray: Stack of processed particles as a float32 NumPy array
+    """
+    print_and_log("", logging.DEBUG)
+    params = (ampcont, bfactor, apix, cs, voltage)
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        results = list(executor.map(apply_ctf_with_eman2, particles, defocuses, [params]*len(particles)))
+    
+    particles_CTF = np.array(results, dtype=np.float32)
+    return particles_CTF
+
 def create_collage(large_image, small_images, particle_locations, gaussian_variance):
     """
     Create a collage of small images on a blank canvas of the same size as the large image.
@@ -2609,7 +2655,6 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     # Read micrograph and particles, and get some information
     large_image = readmrc(large_image_path)
-    small_images = readmrc(small_images)
     image_size = np.flip(large_image.shape)
     num_small_images = len(small_images)
     half_small_image_width = int(small_images.shape[1]/2)
@@ -2870,21 +2915,17 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
         noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
-        writemrc(f"temp_{structure_name}_noise.mrc", noisy_particles)
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Applying CTF based on the recorded defocus ({float(defocus):.4f} microns) and microscope parameters (Voltage: {args.voltage}keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) that were used to collect the micrograph...", logging.INFO)
-        output = subprocess.run(["e2proc2d.py", "--mult=-1", 
-                        "--process", f"math.simulatectf:ampcont={args.ampcont}:bfactor={args.bfactor}:apix={args.apix}:cs={args.Cs}:defocus={defocus}:voltage={args.voltage}", 
-                        "--process", "normalize.edgemean", f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"], capture_output=True, text=True).stdout
-        print_and_log(output, logging.INFO)
+        noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor, args.apix, args.Cs, args.voltage, args.cpus)
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
-            'small_images': f"temp_{structure_name}_noise_CTF.mrc",
+            'small_images': noisy_particles_CTF,
             'structure_name': structure_name,
             'orientations': orientations }
         particle_and_micrograph_generation_options = { 'scale_percent': args.scale_percent,
@@ -2912,11 +2953,6 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log("Done!", logging.INFO)
         total_num_particles_projected += num_particles_projected
         total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
-
-        # Cleanup
-        for temp_file in [f"temp_{structure_name}_noise.mrc", f"temp_{structure_name}_noise_CTF.mrc"]:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
 
     # Downsample micrographs and coordinate files
     if args.binning > 1:
