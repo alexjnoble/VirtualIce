@@ -36,7 +36,6 @@ import random
 import shutil
 import inspect
 import logging
-import mrcfile
 import argparse
 import textwrap
 import warnings
@@ -45,7 +44,6 @@ import subprocess
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
-from EMAN2 import EMNumPy
 from multiprocessing import Pool
 from urllib import request, error
 from xml.etree import ElementTree as ET
@@ -67,8 +65,11 @@ except ImportError:
 ndimage = None
 fftpack = None
 
-# Suppress RuntimeWarnings raised by mrcfile for the entire script; sometimes it says filesize is unexpected
-warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
+# Suppress warnings from mrcfile (filesize unexpected) and EMAN2 (smallest subnormal accuracy) imports
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=(RuntimeWarning, UserWarning))
+    import mrcfile
+    from EMAN2 import EMNumPy
 
 # Global variable to store verbosity level
 global_verbosity = 0
