@@ -8,7 +8,7 @@
 # noise micrographs and their corresponding defoci. It is intended that the noise micrographs
 # are cryoEM images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
-# Dependencies: EMAN2 (namely e2pdb2mrc.py, e2proc3d.py, and e2proc2d.py)
+# Dependencies: EMAN2 (namely e2pdb2mrc.py and e2proc3d.py)
 #               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
@@ -43,9 +43,9 @@ import warnings
 import itertools
 import subprocess
 import numpy as np
-from EMAN2 import *
 import pandas as pd
 import SimpleITK as sitk
+from EMAN2 import EMNumPy
 from multiprocessing import Pool
 from urllib import request, error
 from xml.etree import ElementTree as ET
@@ -235,10 +235,10 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90, 0, 0]' or '[*, 0, 90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
     simulation_group.add_argument("-av", "--angle_variation", type=float, default=5.0, help="Standard deviation for normal distribution of variations around preferred angles (in degrees). Default is %(default)s")
     simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.8, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
-    simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s (ie. 10%%)")
-    simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
-    simulation_group.add_argument("-cs", "--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
-    simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 e2proc2d.py option). Default is %(default)s")
+    simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 CTF option). Default is %(default)s (ie. 10%%)")
+    simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 CTF option). Default is %(default)s")
+    simulation_group.add_argument("-cs", "--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 CTF option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
+    simulation_group.add_argument("-K", "--voltage", type=float, default=300, help="Microscope voltage (keV) when applying CTF to projections (EMAN2 CTF option). Default is %(default)s")
 
     # Junk Labels Options
     junk_labels_group = parser.add_argument_group('\033[1mJunk Labels Options\033[0m')
