@@ -36,10 +36,12 @@ import random
 import shutil
 import inspect
 import logging
+import mrcfile
 import argparse
 import textwrap
 import warnings
 import itertools
+import threading
 import subprocess
 import numpy as np
 import pandas as pd
@@ -66,9 +68,9 @@ ndimage = None
 fftpack = None
 
 # Suppress warnings from mrcfile (filesize unexpected) and EMAN2 (smallest subnormal accuracy) imports
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
 with warnings.catch_warnings():
-    warnings.simplefilter("ignore", category=(RuntimeWarning, UserWarning))
-    import mrcfile
+    warnings.simplefilter("ignore", category=(UserWarning))
     from EMAN2 import EMNumPy
 
 # Global variable to store verbosity level
@@ -267,6 +269,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
     output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
     output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
+    output_group.add_argument("-3", "--view_in_3dmod", action='store_true', help="View generated micrographs in 3dmod at the end of the run")
 
     # System and Program Options
     misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
@@ -371,10 +374,8 @@ def parse_arguments(script_start_time):
     validate_positive_float(parser, "--ampcont", args.ampcont)
     validate_positive_float(parser, "--voltage", args.voltage)
     validate_positive_int(parser, "--json_scale", args.json_scale)
+    validate_positive_int(parser, "--jpeg_quality", args.jpeg_quality)
     validate_positive_int(parser, "--parallelize_structures", args.parallelize_structures)
-
-    if args.jpeg_quality < 0:
-        parser.error("--jpeg_quality must be an integer.")
 
     # Dose damaging preset parameter mapping
     if args.dose_damage != 'Custom' and args.dose_damage != 'None':
@@ -1762,7 +1763,7 @@ def read_star_particles(star_file_path):
         for i, line in enumerate(file):
             if 'data_particles' in line:
                 # Found the data_particles section, now look for the actual data start
-                data_start_line = i + 8  # Adjust if more lines are added to the star file
+                data_start_line = i + 10  # Adjust if more lines are added to the star file
                 break
 
     if data_start_line is None:
@@ -1772,7 +1773,7 @@ def read_star_particles(star_file_path):
     # Correct the `skiprows` approach to accurately target the start of data rows
     # Use `comment='#'` to ignore lines starting with '#'
     df = pd.read_csv(star_file_path, sep='\s+', skiprows=lambda x: x < data_start_line, header=None,
-                     names=['micrograph_name', 'coord_x', 'coord_y', 'angle', 'optics_group'], comment='#')
+                     names=['micrograph_name', 'coord_x', 'coord_y', 'angle_psi', 'angle_rot', 'angle_tilt', 'optics_group'], comment='#')
 
     return df
 
@@ -2379,7 +2380,7 @@ def apply_ctfs_with_eman2(particles, defocuses, ampcont, bfactor, apix, cs, volt
     params = (ampcont, bfactor, apix, cs, voltage)
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(apply_ctf_with_eman2, particles, defocuses, [params]*len(particles)))
-    
+
     particles_CTF = np.array(results, dtype=np.float32)
     return particles_CTF
 
@@ -2582,7 +2583,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
 
     # Combine filtered_particle_locations with orientations for easier passing
     filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations) if loc in filtered_particle_locations]
-    
+
     save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file)
 
     return blended_image, filtered_particle_locations
@@ -2685,20 +2686,20 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
-        print_and_log(f"\nWriting synthetic micrograph as a MRC file: {output_path}.mrc...\n", logging.INFO)
+        print_and_log(f"\nWriting synthetic micrograph as a MRC file: {output_path}.mrc...", logging.INFO)
         writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image))  # Write mrc normalized with mean of 0 and std of 1
     if save_as_png:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\nWriting synthetic micrograph as a PNG file: {output_path}.png...\n", logging.INFO)
+        print_and_log(f"\nWriting synthetic micrograph as a PNG file: {output_path}.png...", logging.INFO)
         cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
     if save_as_jpeg:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...\n", logging.INFO)
-        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+        print_and_log(f"\nWriting synthetic micrograph as a JPEG file: {output_path}.jpeg...", logging.INFO)
+        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
 
     return len(particle_locations), len(filtered_particle_locations)
 
@@ -3060,6 +3061,35 @@ def print_run_information(num_micrographs, structure_names, time_str, total_numb
         print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace with your files)", logging.WARNING)
     print_and_log(f"\033[1m{'-' * 100}\033[0m\n", logging.WARNING)
 
+def find_micrograph_files(structure_dirs):
+    """
+    Find all micrograph files (.mrc, .png, .jpeg) in the given structure directories.
+    Order final list so that for a given micrograph, the mrc file is opened first, then png, then jpeg.
+
+    :param list structure_dirs: List of structure directories to search for micrograph files.
+    :return list: List of paths to found micrograph files.
+    """
+    print_and_log("", logging.DEBUG)
+    micrograph_files = []
+    for structure_dir in structure_dirs:
+        micrograph_files.extend(glob.glob(os.path.join(structure_dir, '*.mrc')))
+        micrograph_files.extend(glob.glob(os.path.join(structure_dir, '*.png')))
+        micrograph_files.extend(glob.glob(os.path.join(structure_dir, '*.jpeg')))
+
+    extension_order = {'.mrc': 0, '.png': 1, '.jpeg': 2}
+    micrograph_files = sorted(micrograph_files, key=lambda f: (f.rsplit('.', 1)[0], extension_order.get('.' + f.rsplit('.', 1)[1], 3)))
+    return micrograph_files
+
+def view_in_3dmod_async(micrograph_files):
+    """
+    Open micrograph files in 3dmod asynchronously.
+
+    :param list micrograph_files: List of micrograph file paths to open in 3dmod.
+    """
+    print_and_log("", logging.DEBUG)
+    subprocess.run(["3dmod"] + micrograph_files)
+    print_and_log("Opening micrographs in 3dmod...", logging.INFO)
+
 def main():
     """
     Main function. Loops over all structures and calls generate_micrographs for each structure,
@@ -3079,6 +3109,7 @@ def main():
     total_cropped_particles = 0
     with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
         # Prepare a list of tasks
+        structure_names = []
         tasks = []
         for structure_index, structure_input in enumerate(args.structures):
             result = process_structure_input(structure_input, args.max_emdb_size, args.std_threshold, args.apix)
@@ -3092,22 +3123,38 @@ def main():
 
         # Wait for all tasks to complete, aggregate results, and crop particles if requested
         for task, structure_name in tasks:
+            structure_names.append(structure_name)
             num_particles_projected, num_particles_with_saved_coordinates, box_size = task.result()
             total_number_of_particles_projected += num_particles_projected
             total_number_of_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
-            # Check if cropping is enabled and perform cropping
-            if args.crop_particles:
+    # Open 3dmod if the argument is set
+    if args.view_in_3dmod:
+        micrograph_files = find_micrograph_files(structure_names)
+        if micrograph_files:
+            # Start 3dmod asynchronously in a separate thread so cropping can happen simultaneously
+            threading.Thread(target=view_in_3dmod_async, args=(micrograph_files,)).start()
+
+    # Check if cropping is enabled and perform cropping
+    if args.crop_particles:
+        with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
+            crop_tasks = []
+            for structure_name in structure_names:
                 box_size = args.box_size if args.box_size is not None else box_size
-                total_cropped_particles += crop_particles_from_micrographs(structure_name, box_size, args.cpus, args.max_crop_particles)
+                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.cpus, args.max_crop_particles)
+                crop_tasks.append(crop_task)
 
-            clean_up(args, structure_name)
+            for crop_task in crop_tasks:
+                total_cropped_particles += crop_task.result()
 
-    num_micrographs = args.num_images * len(args.structures)
+    for structure_name in structure_names:
+        clean_up(args, structure_name)
+
+    num_micrographs = args.num_images * len(structure_names)
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
 
-    print_run_information(num_micrographs, args.structures, time_str, total_number_of_particles_projected,
+    print_run_information(num_micrographs, structure_names, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
                           args.imod_coordinate_file, args.coord_coordinate_file, args.output_directory)
 
