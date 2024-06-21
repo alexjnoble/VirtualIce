@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Author: Alex J. Noble, assisted by GPT, Claude, and Gemini, 2023-24 @SEMC, MIT License
+# Author: Alex J. Noble, assisted by GPT, Claude, & Gemini, 2023-24 @SEMC, MIT License
 #
 # VirtualIce: Synthetic CryoEM Micrograph Generator
 #
@@ -8,20 +8,20 @@
 # noise micrographs and their defoci. It is intended that the noise micrographs are cryoEM
 # images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
-# Dependencies: EMAN2 (namely e2pdb2mrc.py and e2proc3d.py)
+# Dependencies: EMAN2 (namely e2pdb2mrc.py & e2proc3d.py)
 #               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
 #
-# EMAN2 is distributed under BSD-3-Clause and GPL-2.0 licenses. For details, see:
+# EMAN2 is distributed under BSD-3-Clause & GPL-2.0 licenses. For details, see:
 # - BSD-3-Clause: https://opensource.org/licenses/BSD-3-Clause
 # - GPL-2.0: https://opensource.org/licenses/GPL-2.0
 # EMAN2 source code: https://github.com/cryoem/eman2
 #
 # IMOD (separate install; GPL-2.0 License) is optional to output IMOD coordinate files.
-# IMOD source code and packages: https://bio3d.colorado.edu/imod/
+# IMOD source code & packages: https://bio3d.colorado.edu/imod/
 #
-# Ensure compliance with license terms when obtaining and using EMAN2 and IMOD.
+# Ensure compliance with license terms when obtaining and using EMAN2 & IMOD.
 __version__ = "1.0.0"
 
 import os
@@ -67,7 +67,7 @@ except ImportError:
 ndimage = None
 fftpack = None
 
-# Suppress warnings from mrcfile (filesize unexpected) and EMAN2 (smallest subnormal accuracy) imports
+# Suppress warnings from mrcfile (filesize unexpected) & EMAN2 (smallest subnormal accuracy) imports
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="mrcfile")
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", category=(UserWarning))
@@ -115,7 +115,6 @@ def check_binning(value):
 
 def parse_aggregation_amount(values, num_micrographs):
     """
-    NOTE: While the docstring is correct, the function is being developed & tested for all cases.
     Parse the aggregation amount input by the user.
 
     The function accepts:
@@ -138,9 +137,9 @@ def parse_aggregation_amount(values, num_micrographs):
     - 'random' or 'r': A random float between 0 and 10.
     - 'random random' or 'r r': A list of random floats between 0 and 10 of length of the
                                     number of micrographs requested.
-    - Combinations ending in 'r' or 'random' like 'low 5 high r': A list of random floats in the
-                                                                  specified ranges/values of length of
-                                                                  the number of micrographs requested.
+    - Combinations ending in 'r' | 'random' like 'low 5 h r': A list of random floats in the
+                                                              specified ranges/values of length of
+                                                              the number of micrographs requested.
 
     :param list_of_single_valued_lists values: The input values for aggregation amount.
     :return list: The parsed aggregation amount as a list of floats.
@@ -164,7 +163,7 @@ def parse_aggregation_amount(values, num_micrographs):
         if 0 <= numeric_value <= 10:
             return [numeric_value]
         else:
-            print_and_log(f"Warning: Input value {value} is outside the allowed range (0-10). Value will be adjusted to the nearest valid value.", logging.INFO)
+            print_and_log(f"Warning: Input value {value} is outside the allowed range (0-10). Value adjusted to the nearest valid value.", logging.INFO)
             return [numeric_value]
 
     if values[-1].lower() in {'r', 'random'}:
@@ -236,7 +235,7 @@ def remove_duplicates_structures(lst):
     exclude_duplicates = {'R', 'RP', 'RE', 'RM', 'RANDOM'}  # Set of entries to exclude from duplicate removal
 
     for item in lst:
-        if '.' in item and item.rsplit('.', 1)[1]:  # Check if item has a file extension (ie. PDB or EMDB entry)
+        if '.' in item and item.rsplit('.', 1)[1]:  # Check if item has a file extension (ie. local file)
             normalized_item = item
         else:
             normalized_item = item.upper()
@@ -655,7 +654,7 @@ def is_pdb_id(structure_input):
     :return bool: True if the input string is a valid PDB ID, False otherwise.
     """
     print_and_log("", logging.DEBUG)
-    # PDB ID must be 4 characters: first character is a number, next 3 are alphanumeric, and there must be at least one letter
+    # PDB ID must be 4 characters: first character is a number, next 3 are alphanumeric, & there must be at least one letter
     return bool(re.match(r'^[0-9][A-Za-z0-9]{3}$', structure_input) and any(char.isalpha() for char in structure_input))
 
 def get_pdb_sample_name(pdb_id):
@@ -770,7 +769,7 @@ def download_random_pdb():
         success = download_pdb(pdb_id, suppress_errors=True)  # Suppress errors for random PDB download attempts
         if success:
             return pdb_id
-        # No need to explicitly handle failure; loop continues until a successful download occurs
+        # No need to explicitly handle failure; loop repeats until a file downloads
 
 def get_emdb_sample_name(emd_number):
     """
@@ -779,7 +778,7 @@ def get_emdb_sample_name(emd_number):
 
     :param str emd_number: The EMD number (e.g., '10025').
     :raises requests.HTTPError: If the request to the EMDB API fails.
-    :raises xml.etree.ElementTree.ParseError: If the response from the EMDB API is not valid XML.
+    :raises xml.etree.ElementTree.ParseError: If XML file is not valid.
     :returns str: The name of the EMDB entry, or None if not found.
     """
     print_and_log("", logging.DEBUG)
@@ -1140,7 +1139,7 @@ def readmrc(mrc_path):
     Read an MRC file and return its data as a NumPy array.
 
     :param str mrc_path: The file path of the MRC file to read.
-    :return numpy_array float: The data of the MRC file as a NumPy array, and the voxel size.
+    :return numpy_array float: The data of the MRC file as a NumPy array
     """
     print_and_log("", logging.DEBUG)
     with mrcfile.open(mrc_path, mode='r') as mrc:
@@ -1149,18 +1148,27 @@ def readmrc(mrc_path):
 
     return numpy_array
 
-def writemrc(mrc_path, numpy_array):
+def writemrc(mrc_path, numpy_array, pixelsize=1.0):
     """
-    Write a NumPy array as an MRC file.
+    Write a 2D or 3D NumPy array as an MRC file with specified pixel size.
 
     :param str mrc_path: The file path of the MRC file to write.
-    :param numpy_array: The NumPy array to be written.
+    :param numpy_array: The 2D or 3D NumPy array to be written.
+    :param float pixelsize: The pixel/voxel size in Angstroms, assumed equal for all dimensions.
+    :raises ValueError: If input numpy_array is not 2D or 3D.
 
-    This function writes the numpy_array to the specified mrc_path.
+    This function writes the numpy_array to the specified mrc_path with the pixel size in the header.
     """
     print_and_log("", logging.DEBUG)
+    # Ensure the array is 2D or 3D
+    if numpy_array.ndim not in [2, 3]:
+        raise ValueError("Input array must be 2D or 3D")
+
     with mrcfile.new(mrc_path, overwrite=True) as mrc:
         mrc.set_data(numpy_array)
+        mrc.voxel_size = (pixelsize, pixelsize, pixelsize)
+        mrc.update_header_from_data()
+        mrc.update_header_stats()
 
     return
 
@@ -1240,7 +1248,7 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
     :param list_of_tuples particle_locations: A list of tuples; each tuple contains the x, y coordinates.
     :param list_of_tuples orientations: List of orientations as tuples of three Euler angles (alpha, beta, gamma) in degrees.
 
-    This function appends particle locations and orientations to a .star file on the disk, along with the image_path.
+    This function appends particle locations, orientations, and image_path to a .star file on the disk.
     """
     print_and_log("", logging.DEBUG)
     # Open the star file once and write all coordinates
@@ -1652,13 +1660,14 @@ def fourier_crop(image, downsample_factor):
     # Take the real part of the result (to remove any imaginary components due to numerical errors)
     return np.real(image_cropped)
 
-def downsample_micrograph(image_path, downsample_factor, use_gpu):
+def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
     """
     Downsample a micrograph by Fourier cropping and save it to a temporary directory.
     Supports mrc, png, and jpeg formats.
 
     :param str image_path: Path to the micrograph image file.
     :param int downsample_factor: Factor by which to downsample the image in both dimensions.
+    :param float pixelsize: Pixel size of the micrograph.
     :param bool use_gpu: Whether to use GPU for processing.
 
     This function writes a .mrc/.png/.jpeg file to the disk.
@@ -1685,20 +1694,20 @@ def downsample_micrograph(image_path, downsample_factor, use_gpu):
         # Save the downsampled micrograph with the same name plus _bin## in the binned directory
         binned_image_path = os.path.join(bin_dir, f"{name}_bin{downsample_factor}{ext}")
         if ext == '.mrc':
-            with mrcfile.new(binned_image_path, overwrite=True) as mrc:
-                mrc.set_data(downsampled_image.astype(np.float32))
+            writemrc(binned_image_path, downsampled_image.astype(np.float32), downsample_factor * pixelsize)
         else:  # ext == .png/.jpeg
             cv2.imwrite(binned_image_path, downsampled_image)
 
     except Exception as e:
         print_and_log(f"Error processing {image_path}: {str(e)}", logging.INFO)
 
-def parallel_downsample(image_directory, downsample_factor, cpus, use_gpu, gpu_ids):
+def parallel_downsample(image_directory, downsample_factor, pixelsize, cpus, use_gpu, gpu_ids):
     """
     Downsample all micrographs in a directory in parallel.
 
     :param str image_directory: Local micrograph directory name with .mrc/.png/.jpeg files.
     :param int downsample_factor: Factor by which to downsample the images in x,y.
+    :param float pixelsize: Pixel size of the micrographs.
     :param int cpus: Number of CPUs to use if use_gpu is not True.
     :param bool use_gpu: Whether to use GPU for processing.
     :param list gpu_ids: List of GPU IDs to use for processing.
@@ -1728,7 +1737,7 @@ def parallel_downsample(image_directory, downsample_factor, cpus, use_gpu, gpu_i
                     break
                 with cp.cuda.Device(gpu_id):
                     for image_path in batch_paths:
-                        downsample_micrograph(image_path, downsample_factor, use_gpu)
+                        downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu)
                 start = end
                 if start >= len(image_paths):
                     break
@@ -1736,7 +1745,7 @@ def parallel_downsample(image_directory, downsample_factor, cpus, use_gpu, gpu_i
         # Create a pool of worker processes
         pool = Pool(processes=cpus)
         # Downsample each micrograph by processing each image path in parallel
-        pool.starmap(downsample_micrograph, [(image_path, downsample_factor, use_gpu) for image_path in image_paths])
+        pool.starmap(downsample_micrograph, [(image_path, downsample_factor, pixelsize, use_gpu) for image_path in image_paths])
         # Close the pool to prevent any more tasks from being submitted
         pool.close()
         # Wait for all worker processes to finish
@@ -2703,6 +2712,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     # Extract input options
     large_image_path = input_options['large_image_path']
     small_images = input_options['small_images']
+    pixelsize = input_options['pixelsize']
     structure_name = input_options['structure_name']
     orientations = input_options['orientations']
 
@@ -2767,7 +2777,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
         print_and_log(f"\nWriting synthetic micrograph: {output_path}.mrc...", logging.INFO)
-        writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image))  # Write mrc normalized with mean of 0 and std of 1
+        writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
     if save_as_png:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
@@ -2783,7 +2793,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     return len(particle_locations), len(filtered_particle_locations)
 
-def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, max_crop_particles):
+def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles):
     """
     Crops particles from a single micrograph.
 
@@ -2791,6 +2801,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, max_
     :param DataFrame particle_rows: DataFrame rows of particles to be cropped from the micrograph.
     :param str particles_dir: Directory to save cropped particles.
     :param int box_size: The box size in pixels for the cropped particles.
+    :param float pixelsize: Pixel size of the micrograph.
     :param int max_crop_particles: The maximum number of particles to crop from the micrograph.
 
     This function writes .mrc files to the disk.
@@ -2809,12 +2820,12 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, max_
 
             cropped_particle = mrc.data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
             particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
-            writemrc(particle_path, cropped_particle.astype(np.float32))
+            writemrc(particle_path, cropped_particle.astype(np.float32), pixelsize)
             cropped_count += 1
 
     return cropped_count
 
-def crop_particles_from_micrographs(structure_dir, box_size, num_cpus, max_crop_particles):
+def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, num_cpus, max_crop_particles):
     """
     Crops particles from micrographs based on coordinates specified in a micrograph STAR file
     and saves them with a specified box size. This function operates in parallel, using a specified
@@ -2823,7 +2834,9 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus, max_crop_
     :param str structure_dir: The directory containing the structure's micrographs and STAR file.
     :param int box_size: The box size in pixels for the cropped particles. If None, the function
                          will dynamically determine the box size from the .mrc map used for projections.
+    :param float pixelsize: Pixel size of the micrographs.
     :param int num_cpus: Number of CPU cores for parallel processing. If unspecified, all cores are used.
+    :param int max_crop_particles: The maximum number of particles to crop from the micrographs.
 
     Notes:
     - Particles whose specified box would extend beyond the micrograph boundaries are not cropped.
@@ -2853,7 +2866,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, num_cpus, max_crop_
                 continue
 
             print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
-            future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, max_crop_particles)
+            future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles)
             futures.append(future)
 
         for future in futures:
@@ -3012,11 +3025,12 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         else:
             aggregation_amount_val = 0
 
-        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
+        print_and_log(f"Adding the {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...", logging.INFO)
 
         # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
         input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
             'small_images': noisy_particles_CTF,
+            'pixelsize': args.apix,
             'structure_name': structure_name,
             'orientations': orientations }
         particle_and_micrograph_generation_options = { 'scale_percent': args.scale_percent,
@@ -3050,7 +3064,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     if args.binning > 1:
         # Downsample micrographs
         print_and_log(f"Binning/Downsampling micrographs by {args.binning} by Fourier cropping...\n", logging.INFO)
-        parallel_downsample(f"{structure_name}/", args.binning, args.cpus, args.use_gpu, args.gpu_ids)
+        parallel_downsample(f"{structure_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
 
         # Downsample coordinate files
         downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
@@ -3218,6 +3232,9 @@ def main():
             total_number_of_particles_projected += num_particles_projected
             total_number_of_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
+    for structure_name in structure_names:
+        clean_up(args, structure_name)
+
     # Open 3dmod if the argument is set
     if args.view_in_3dmod:
         micrograph_files = find_micrograph_files(structure_names)
@@ -3231,14 +3248,11 @@ def main():
             crop_tasks = []
             for structure_name in structure_names:
                 box_size = args.box_size if args.box_size is not None else box_size
-                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.cpus, args.max_crop_particles)
+                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.apix, args.cpus, args.max_crop_particles)
                 crop_tasks.append(crop_task)
 
             for crop_task in crop_tasks:
                 total_cropped_particles += crop_task.result()
-
-    for structure_name in structure_names:
-        clean_up(args, structure_name)
 
     num_micrographs = args.num_images * len(structure_names)
     end_time = time.time()
