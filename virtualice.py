@@ -9,7 +9,7 @@
 # images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
 # Dependencies: EMAN2 (namely e2pdb2mrc.py & e2proc3d.py)
-#               pip install mrcfile numpy opencv-python pandas scipy SimpleITK
+#               pip install cupy gpustat mrcfile numpy opencv-python pandas scipy SimpleITK
 #
 # This program requires a separate installation of EMAN2 for proper functionality.
 #
@@ -34,6 +34,7 @@ import json
 import time
 import random
 import shutil
+import gpustat
 import inspect
 import logging
 import mrcfile
@@ -56,7 +57,7 @@ try:
     import cupy as cp
     import cupyx.scipy.ndimage as cupy_ndimage
     import cupyx.scipy.fftpack as cupy_fftpack
-    from cupyx.scipy.ndimage import affine_transform as cp_affine_transform
+    from cupyx.scipy.ndimage import affine_transform as cp_affine_transform, gaussian_filter as cp_gaussian_filter
     gpu_available = True
 except ImportError:
     import numpy as cp
@@ -1173,6 +1174,28 @@ def writemrc(mrc_path, numpy_array, pixelsize=1.0):
 
     return
 
+def lowPassFilter_gpu(imgarray_gpu, apix=1.0, bin=1, radius=0.0):
+    """
+    Low pass filter image to radius resolution using Gaussian smoothing on GPU.
+
+    :param cupy.ndarray imgarray_gpu: The image data as a 2D or 3D CuPy array.
+    :param float apix: The pixel size in Angstroms per pixel.
+    :param int bin: The binning factor applied to the image.
+    :param float radius: The desired resolution in Angstroms at which to apply the filter.
+    :return cupy.ndarray: Filtered image array. Returns original array if radius is None or <= 0.
+    """
+    print_and_log("", logging.DEBUG)
+    if radius is None or radius <= 0.0:
+        return imgarray_gpu
+
+    # Adjust sigma for apix and binning
+    sigma = float(radius / apix / float(bin))
+
+    # Apply Gaussian filter using CuPy
+    filtered_imgarray_gpu = cp_gaussian_filter(imgarray_gpu, sigma=sigma / 10.0)  # 10.0 is a fudge factor that gets dose damaging about right.
+
+    return filtered_imgarray_gpu
+
 def lowPassFilter(imgarray, apix=1.0, bin=1, radius=0.0):
     """
     Low pass filter image to radius resolution using SimpleITK for Gaussian smoothing.
@@ -1574,6 +1597,19 @@ def get_max_batch_size(image_size, free_mem):
     # Ensure at least one image can be processed
     return max(1, int(max_batch_size))
 
+def get_gpu_utilization(gpu_id):
+    """
+    Get the current GPU utilization (both memory and core usage) for a specific GPU.
+
+    :param int gpu_id: The ID of the GPU to query.
+    :return dict: Dictionary containing free memory and core usage percentage.
+    """
+    gpu_stats = gpustat.GPUStatCollection.new_query()
+    gpu = gpu_stats[gpu_id]
+    free_mem = gpu.memory_free
+    core_usage = gpu.utilization
+    return {'free_mem': free_mem, 'core_usage': core_usage}
+
 def fourier_crop_gpu(image, downsample_factor):
     """	
     Fourier crops a 2D image using GPU.
@@ -1720,18 +1756,19 @@ def parallel_downsample(image_directory, downsample_factor, pixelsize, cpus, use
         image_size = readmrc(image_paths[0]).nbytes
         batch_sizes = {}
 
-        # Determine batch size for each GPU based on its available memory
+        # Determine batch size for each GPU based on its available memory and utilization
         for gpu_id in gpu_ids:
-            with cp.cuda.Device(gpu_id):
-                free_mem, _ = cp.cuda.runtime.memGetInfo()
-                batch_size = get_max_batch_size(image_size, free_mem)
-                batch_sizes[gpu_id] = batch_size
+            utilization = get_gpu_utilization(gpu_id)
+            batch_size = get_max_batch_size(image_size, utilization['free_mem'])
+            batch_sizes[gpu_id] = {'batch_size': batch_size, 'core_usage': utilization['core_usage']}
 
         # Distribute and process images
         start = 0
         while start < len(image_paths):
-            for gpu_id, batch_size in batch_sizes.items():
-                end = start + batch_size
+            # Sort GPUs by core usage in ascending order
+            sorted_gpus = sorted(batch_sizes.items(), key=lambda x: x[1]['core_usage'])
+            for gpu_id, batch_info in sorted_gpus:
+                end = start + batch_info['batch_size']
                 batch_paths = image_paths[start:end]
                 if not batch_paths:
                     break
@@ -2423,6 +2460,61 @@ def estimate_noise_parameters(mrc_path):
 
         return mean, gaussian_variance
 
+def process_slices_gpu(args):
+    """
+    Process slices of the particle stack by adding Poisson noise and optionally dose damaging using GPU.
+
+    :param args: A tuple containing the following parameters:
+                 - slice numpy_array: A 3D numpy array representing a slice of the particle stack.
+                 - num_frames int: Number of frames to simulate for each particle image.
+                 - float dose_a: Custom value for the 'a' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float dose_b: Custom value for the 'b' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float dose_c: Custom value for the 'c' variable in equation (3) of Grant & Grigorieff, 2015.
+                 - float apix: Pixel size (in Angstroms) of the ice images.
+                 - scaling_factor float: Factor by which to scale the particle images before adding noise.
+    :return numpy_array: A 3D numpy array representing the processed slice of the particle stack with added noise.
+    """
+    print_and_log("", logging.DEBUG)
+    # Unpack the arguments
+    slice, num_frames, scaling_factor, dose_a, dose_b, dose_c, apix = args
+    
+    # Transfer slice to GPU
+    slice_gpu = cp.asarray(slice, dtype=cp.float32)
+    noisy_slice_gpu = cp.zeros_like(slice_gpu)
+
+    # Iterate over each particle in the slice
+    for i in range(slice_gpu.shape[0]):
+        # Get the i-th particle and scale it by the scaling factor
+        particle = slice_gpu[i, :, :] * scaling_factor
+
+        # Create a mask for non-zero values in the particle
+        mask = particle > 0
+
+        # For each frame, simulate the noise and accumulate the result
+        for j in range(num_frames):
+            j += 1  # Simulates the accumulated dose per 1 e/A^2 per simulated frame
+
+            # Initialize a frame with zeros
+            noisy_frame_gpu = cp.zeros_like(particle)
+
+            # Add Poisson noise to the non-zero values in the particle, modulated by the original pixel values; it represents shot noise.
+            noisy_frame_gpu[mask] = cp.random.poisson(particle[mask])
+
+            # Dose damage frames if requested
+            if not (dose_a == dose_b == dose_c == 0):  # All zero is equivalent to the user specifying None for dose_damage
+                if j != dose_c:
+                    lowpass = float(cp.real(cp.complex64(dose_a/(j - dose_c))**(1/dose_b)))  # Equation (3) from Grant & Grigorieff, 2015. Assumes 1 e/A^2 per simulated frame.
+                else:  # No divide by zero
+                    lowpass = float(cp.real(cp.complex64(dose_a/(j - dose_c + 0.001))**(1/dose_b)))  # Slight perturbation of the equation above
+
+                # Apply low-pass filter on the GPU
+                noisy_frame_gpu = lowPassFilter_gpu(noisy_frame_gpu, apix=apix, radius=lowpass)
+
+            # Accumulate the noisy frame into the noisy slice
+            noisy_slice_gpu[i, :, :] += noisy_frame_gpu
+
+    return cp.asnumpy(noisy_slice_gpu)
+
 def process_slice(args):
     """
     Process a slice of the particle stack by adding Poisson noise to simulate electron counts from proteins.
@@ -2474,6 +2566,62 @@ def process_slice(args):
             noisy_slice[i, :, :] += noisy_frame
 
     return noisy_slice
+
+def add_poisson_noise_gpu(particle_stack, num_frames, dose_a, dose_b, dose_c, apix, gpu_ids, scaling_factor=1.0):
+    """
+    Add Poisson noise to a stack of particle images using GPU.
+
+    This function simulates the acquisition of `num_frames` frames for each particle image
+    in the input stack, adds Poisson noise to each frame, and then sums up the frames to
+    obtain the final noisy particle image. The function applies both noises only to the
+    non-zero values in each particle image, preserving the background.
+
+    :param numpy_array particle_stack: 3D numpy array representing a stack of 2D particle images.
+    :param int num_frames: Number of frames to simulate for each particle image.
+    :param float dose_a: Custom value for the 'a' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float dose_b: Custom value for the 'b' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float dose_c: Custom value for the 'c' variable in equation (3) of Grant & Grigorieff, 2015.
+    :param float apix: Pixel size (in Angstroms) of the ice images.
+    :param float scaling_factor: Factor by which to scale the particle images before adding noise.
+    :param list gpu_ids: List of GPU IDs to use for processing.
+    :return numpy_array: 3D numpy array representing the stack of noisy particle images.
+    """
+    print_and_log("", logging.DEBUG)
+    
+    # Determine the maximum batch size based on available GPU memory for each GPU
+    slice_size = particle_stack[0].nbytes
+    batch_sizes = {}
+
+    for gpu_id in gpu_ids:
+        utilization = get_gpu_utilization(gpu_id)
+        batch_size = get_max_batch_size(slice_size, utilization['free_mem'])
+        batch_sizes[gpu_id] = {'batch_size': batch_size, 'core_usage': utilization['core_usage']}
+
+    num_slices = particle_stack.shape[0]
+    noisy_particle_stack = []
+
+    # Distribute and process slices across available GPUs
+    start = 0
+    while start < num_slices:
+        # Sort GPUs by core usage in ascending order
+        sorted_gpus = sorted(batch_sizes.items(), key=lambda x: x[1]['core_usage'])
+        for gpu_id, batch_info in sorted_gpus:
+            end = start + batch_info['batch_size']
+            slice_chunk = particle_stack[start:end]
+            if slice_chunk.shape[0] == 0:
+                break
+
+            # Process the chunk on the GPU
+            with cp.cuda.Device(gpu_id):
+                noisy_chunk = process_slices_gpu((slice_chunk, num_frames, scaling_factor, dose_a, dose_b, dose_c, apix))
+            noisy_particle_stack.append(noisy_chunk)
+            start = end
+            if start >= num_slices:
+                break
+
+    # Concatenate the processed chunks back into a single stack
+    noisy_particle_stack = np.concatenate(noisy_particle_stack, axis=0)
+    return noisy_particle_stack
 
 def add_poisson_noise(particle_stack, num_frames, dose_a, dose_b, dose_c, apix, num_cores, scaling_factor=1.0):
     """
@@ -3096,7 +3244,10 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
         mean, gaussian_variance = estimate_noise_parameters(f"{args.image_directory}/{fname}.mrc")
-        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
+        if args.use_gpu:
+            noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.gpu_ids)
+        else:
+            noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Applying CTF based on the recorded defocus ({float(defocus):.4f} microns) and microscope parameters (Voltage: {args.voltage}keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) that were used to collect the micrograph...", logging.INFO)
