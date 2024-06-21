@@ -56,6 +56,7 @@ try:
     import cupy as cp
     import cupyx.scipy.ndimage as cupy_ndimage
     import cupyx.scipy.fftpack as cupy_fftpack
+    from cupyx.scipy.ndimage import affine_transform as cp_affine_transform
     gpu_available = True
 except ImportError:
     import numpy as cp
@@ -1082,7 +1083,7 @@ def reorient_mrc(input_mrc_path, output_mrc_path):
     # Get the coordinates of non-zero voxels
     non_zero_indices = np.argwhere(data)
 
-    # Perform PCA
+    # Perform PCA to find the principal axes
     mean_coords = np.mean(non_zero_indices, axis=0)
     centered_coords = non_zero_indices - mean_coords
     cov_matrix = np.cov(centered_coords, rowvar=False)
@@ -1246,7 +1247,7 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
     :param str structure_name: The name of the structure file.
     :param str image_path: The path of the image to add.
     :param list_of_tuples particle_locations: A list of tuples; each tuple contains the x, y coordinates.
-    :param list_of_tuples orientations: List of orientations as tuples of three Euler angles (alpha, beta, gamma) in degrees.
+    :param list_of_tuples orientations: List of orientations as tuples of Euler angles (alpha, beta, gamma) in degrees.
 
     This function appends particle locations, orientations, and image_path to a .star file on the disk.
     """
@@ -1287,13 +1288,13 @@ def write_mod_file(coordinates, output_file):
     This function converts particle coordinates in a .point file to an IMOD .mod file and writes it to output_file.
     """
     print_and_log("", logging.DEBUG)
-    # Step 1: Write the .point file
+    # Write the .point file
     point_file = os.path.splitext(output_file)[0] + ".point"
     with open(point_file, 'w') as f:
         for x, y in coordinates:
             f.write(f"{x} {y} 0\n")  # Writing each coordinate as a new line in the .point file
 
-    # Step 2: Convert the .point file to a .mod file
+    # Convert the .point file to a .mod file
     convert_point_to_model(point_file, output_file)
 
 def write_coord_file(coordinates, output_file):
@@ -1369,7 +1370,7 @@ def estimate_mass_from_map(mrc_name):
     with mrcfile.open(f"{mrc_name}.mrc", mode='r') as mrc:
         data = mrc.data
         pixel_size_angstroms = mrc.voxel_size.x  # Assuming cubic voxels
-        # 2 Standard deviations gave a reasonable fit for 10 random EMDB entries. It's not very accurate or reliable, though
+        # 2 Standard deviations gave a reasonable fit for 10 random EMDB entries, but it's not very accurate or reliable.
         threshold = data.mean() + 2 * data.std()
         voxel_volume_angstroms_cubed = pixel_size_angstroms**3
         protein_volume_angstroms_cubed = np.sum(data > threshold) * voxel_volume_angstroms_cubed
@@ -1584,6 +1585,7 @@ def fourier_crop_gpu(image, downsample_factor):
     :raises ValueError: If input image is not 2D or if downsample factor is not valid.
     """
     print_and_log("", logging.DEBUG)
+    image = cp.asarray(image)
     # Check if the input image is 2D
     if image.ndim != 2:
         raise ValueError("Input image must be 2D.")
@@ -1612,8 +1614,8 @@ def fourier_crop_gpu(image, downsample_factor):
     # Compute the Inverse Fourier Transform of the cropped Fourier Transform
     image_cropped = cp.fft.ifft2(f_transform_cropped_unshifted)
 
-    # Take the real part of the result (to remove any imaginary components due to numerical errors)
-    return cp.real(image_cropped)
+    # Take the real part of the result (to remove any imaginary components due to numerical errors) and move to a numpy array
+    return cp.asnumpy(cp.real(image_cropped))
 
 def fourier_crop(image, downsample_factor):
     """	
@@ -1681,9 +1683,7 @@ def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
 
         # Apply downsampling
         if use_gpu:
-            image = cp.asarray(image)
             downsampled_image = fourier_crop_gpu(image, downsample_factor)
-            downsampled_image = cp.asnumpy(downsampled_image)
         else:
             downsampled_image = fourier_crop(image, downsample_factor)
 
@@ -1965,7 +1965,7 @@ def generate_orientations(preferred_angles, angle_variation, num_preferred, num_
     :param float angle_variation: Standard deviation for the normal distribution of angle variations.
     :param int num_preferred: Number of preferred orientations to generate.
     :param int num_random: Number of random orientations to generate.
-    :return list_of_tuples: List of orientations with preferred and random angles, truncated to 3 decimal places.
+    :return list_of_tuples: List of orientations with preferred and random angles.
     """
     print_and_log("", logging.DEBUG)
     preferred_orientations = []
@@ -1979,6 +1979,48 @@ def generate_orientations(preferred_angles, angle_variation, num_preferred, num_
 
     random_orientations = [(np.round(np.random.uniform(0, 360), 3), np.round(np.random.uniform(0, 180), 3), np.round(np.random.uniform(0, 360), 3)) for _ in range(num_random)]
     return preferred_orientations + random_orientations
+
+def euler_to_matrix_gpu(alpha, beta, gamma):
+    """
+    Convert ZYZ Euler angles to a rotation matrix using CuPy.
+
+    :param float alpha: First rotation angle in degrees.
+    :param float beta: Second rotation angle in degrees.
+    :param float gamma: Third rotation angle in degrees.
+    :return cupy.ndarray: The combined rotation matrix.
+    """
+    print_and_log("", logging.DEBUG)
+    alpha = cp.deg2rad(cp.asarray(alpha))
+    beta = cp.deg2rad(cp.asarray(beta))
+    gamma = cp.deg2rad(cp.asarray(gamma))
+
+    cos_alpha, sin_alpha = cp.cos(alpha), cp.sin(alpha)
+    cos_beta, sin_beta = cp.cos(beta), cp.sin(beta)
+    cos_gamma, sin_gamma = cp.cos(gamma), cp.sin(gamma)
+
+    Rz1 = cp.zeros((3, 3), dtype=cp.float32)
+    Rz1[0, 0] = cos_alpha
+    Rz1[0, 1] = -sin_alpha
+    Rz1[1, 0] = sin_alpha
+    Rz1[1, 1] = cos_alpha
+    Rz1[2, 2] = 1
+
+    Ry = cp.zeros((3, 3), dtype=cp.float32)
+    Ry[0, 0] = cos_beta
+    Ry[0, 2] = sin_beta
+    Ry[1, 1] = 1
+    Ry[2, 0] = -sin_beta
+    Ry[2, 2] = cos_beta
+
+    Rz2 = cp.zeros((3, 3), dtype=cp.float32)
+    Rz2[0, 0] = cos_gamma
+    Rz2[0, 1] = -sin_gamma
+    Rz2[1, 0] = sin_gamma
+    Rz2[1, 1] = cos_gamma
+    Rz2[2, 2] = 1
+
+    R = cp.dot(Rz2, cp.dot(Ry, Rz1))
+    return R
 
 def euler_to_matrix(alpha, beta, gamma):
     """
@@ -2057,6 +2099,33 @@ def pad_projection(projection, original_shape):
 
     return padded_projection
 
+def generate_projection_gpu(angle, volume_data_gpu, original_shape):
+    """
+    Generate a 2D projection of the 3D volume data on the GPU by rotating it to the specified angle using the ZYZ convention.
+
+    :param tuple_of_floats angle: Tuple of three Euler angles (alpha, beta, gamma) in degrees.
+    :param cupy.ndarray volume_data_gpu: 3D volume data on GPU to be projected.
+    :param tuple original_shape: Original shape of the 3D volume.
+    :return numpy.ndarray: 2D projection of the volume data.
+    """
+    print_and_log("", logging.DEBUG)
+    alpha, beta, gamma = angle
+    rotation_matrix = euler_to_matrix_gpu(alpha, beta, gamma)
+
+    # Center of the trimmed volume
+    center = cp.array(volume_data_gpu.shape) / 2
+
+    # Apply affine transformation
+    rotated_volume_gpu = cp_affine_transform(volume_data_gpu, rotation_matrix, offset=center - cp.dot(rotation_matrix, center), order=1)
+
+    # Project the rotated volume
+    projection_gpu = cp.sum(rotated_volume_gpu, axis=2)
+
+    # Pad the projection back to the original shape
+    padded_projection = pad_projection(cp.asnumpy(projection_gpu), original_shape)
+
+    return padded_projection
+
 def generate_projection(angle, volume_data):
     """
     Generate a 2D projection of the 3D volume data by rotating it to the specified angle using the ZYZ convention.
@@ -2087,7 +2156,7 @@ def generate_projection(angle, volume_data):
 
     return padded_projection
 
-def generate_projections(structure, num_projections, orientation_mode, preferred_angles, angle_variation, preferred_weight, num_cores):
+def generate_projections(structure, num_projections, orientation_mode, preferred_angles, angle_variation, preferred_weight, num_cores, use_gpu):
     """
     Generate a list of projections for a given structure based on the specified orientation mode.
 
@@ -2098,7 +2167,8 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
     :param float angle_variation: Standard deviation for normal distribution of variations around preferred angles, optional.
     :param float preferred_weight: Weight of the preferred orientations in the range [0, 1], optional.
     :param int num_cores: Number of CPU cores to use for parallel processing, optional.
-    :return numpy.ndarray list_of_tuples: Array of generated projections, and list of orientations as tuples of three Euler angles (alpha, beta, gamma) in degrees.
+    :param bool use_gpu: Whether to use GPU for processing.
+    :return numpy.ndarray list_of_tuples: Array of generated projections, and list of orientations as tuples of Euler angles (alpha, beta, gamma) in degrees.
     """
     print_and_log("", logging.DEBUG)
     projections = []
@@ -2118,9 +2188,22 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
 
     np.random.shuffle(orientations)
 
-    with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        futures = [executor.submit(generate_projection, angle, structure) for angle in orientations]
-        projections = [future.result() for future in futures]
+    if use_gpu:
+        # Trim the volume to the smallest possible cube containing non-zero voxels
+        trimmed_volume = trim_volume(structure)
+
+        # Transfer trimmed volume to GPU
+        trimmed_volume_gpu = cp.asarray(trimmed_volume)
+
+        original_shape = structure.shape[:2]
+
+        for angle in orientations:
+            projection = generate_projection_gpu(angle, trimmed_volume_gpu, original_shape)
+            projections.append(projection)
+    else:
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            futures = [executor.submit(generate_projection, angle, structure) for angle in orientations]
+            projections = [future.result() for future in futures]
 
     return np.array(projections), orientations
 
@@ -2296,7 +2379,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                     shift_x = int((clump_center[0] - x) * aggregation_factor)
                     shift_y = int((clump_center[1] - y) * aggregation_factor)
                     # To make it so clumps aren't universal attractors, only update the particle location if
-                    # aggregation_factor is less than a random number (ie. use this as a probability of changing).
+                    # aggregation_factor is less than a random number (ie. use this as a probability of changing)
                     if random.random() <= aggregation_factor:
                         new_particle_location = (x + shift_x, y + shift_y)
                     else:
@@ -2313,7 +2396,8 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
 
     if non_random_dist_type == 'micrograph':
         # This will make a non-linear gradient from the probability map (ice thickness gradient) that will scale the ice thickness +-20% from the given value
-        inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))  # 1 - prob_map because particles should be scaled to be darker in thinner areas and lighter in thinner areas
+        # 1 - prob_map because particles should be scaled to be darker in thinner areas and lighter in thinner areas
+        inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))
         return particle_locations, inverse_normalized_prob_map
     else:
         return particle_locations, None
@@ -2947,7 +3031,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
 
         # Random or user-specified ice thickness
-        # Adjust the relative ice thickness to work mathematically (yes, the inputs are inversely named and there are fudge factors just so the user gets a number that feels right)
+        # Adjust the relative ice thickness to work mathematically
+        # (yes, the inputs are inversely named and there are fudge factors just so the user gets a number that feels right)
         if args.ice_thickness is None:
             min_ice_thickness = ice_scaling_fudge_factor/(0.32*args.max_ice_thickness + 20.45)
             max_ice_thickness = ice_scaling_fudge_factor/(0.32*args.min_ice_thickness + 20.45)
@@ -2974,7 +3059,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
         else:
             print_and_log("Choosing a random number of particles to add to the micrograph...", logging.INFO)
 
-        # Set the particle distribution type. If none is given (default), then 'micrograph' is used
+        # Set the particle distribution type. Default to 'micrograph'
         non_random_distributions = {'micrograph', 'gaussian', 'circular', 'inverse_circular'}
         if distribution in non_random_distributions:
             dist_type = 'non_random'
@@ -2984,7 +3069,8 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
             non_random_dist_type = None
         elif distribution == 'non_random':
             dist_type = 'non_random'
-            # Randomly select a non-random distribution, weighted towards micrograph because it is the most realistic. Note: gaussian can create 1-5 gaussian blobs on the micrograph
+            # Randomly select a non-random distribution, weighted towards micrograph because it is the most realistic.
+            # Note: gaussian can create 1-5 gaussian blobs on the micrograph
             non_random_dist_type = np.random.choice(['circular', 'inverse_circular', 'gaussian', 'micrograph'], p=[0.0025, 0.0075, 0.19, 0.8])
         else:  # distribution == None
             dist_type = 'non_random'
@@ -3005,7 +3091,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
         print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...", logging.INFO)
         # Generate projections with the specified orientation mode
-        particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus)
+        particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
         print_and_log("Done!\n", logging.INFO)
 
         print_and_log(f"Adding simulated noise to the particles by sampling pixel values from a Poisson distribution across {args.num_simulated_particle_frames} frames, and optionally dose damaging frames...", logging.INFO)
