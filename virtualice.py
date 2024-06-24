@@ -3025,6 +3025,79 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     return len(particle_locations), len(filtered_particle_locations)
 
+def crop_particles_gpu(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id):
+    """
+    Crops particles from multiple micrographs using GPU in batches.
+
+    :param list micrograph_paths: List of paths to the micrographs.
+    :param list particle_rows_list: List of DataFrame rows of particles to be cropped from each micrograph.
+    :param str particles_dir: Directory to save cropped particles.
+    :param int box_size: The box size in pixels for the cropped particles.
+    :param float pixelsize: Pixel size of the micrographs.
+    :param int max_crop_particles: The maximum number of particles to crop from each micrograph.
+    :param int gpu_id: ID of the GPU to use for processing.
+    :return int: Total number of particles cropped from the micrographs.
+    """
+    print_and_log("", logging.DEBUG)
+    cropped_count = 0
+    with cp.cuda.Device(gpu_id):
+        with mrcfile.open(micrograph_path, permissive=True) as mrc:
+            micrograph_data = cp.asarray(mrc.data)
+            for _, row in particle_rows.iterrows():
+                if max_crop_particles and cropped_count >= max_crop_particles:
+                    break
+                x, y = int(row['coord_x']), int(row['coord_y'])
+                half_box_size = box_size // 2
+
+                if x - half_box_size < 0 or y - half_box_size < 0 or x + half_box_size > micrograph_data.shape[1] or y + half_box_size > micrograph_data.shape[0]:
+                    continue
+
+                cropped_particle = micrograph_data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
+                particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
+                writemrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
+                cropped_count += 1
+
+    return cropped_count
+
+def crop_particles_gpu_batch(micrograph_paths, particle_rows_list, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id):
+    """
+    Crops particles from micrographs based on coordinates specified in a micrograph STAR file
+    and saves them with a specified box size. This function operates in parallel, using multiple GPUs
+    or CPU cores to process different micrographs concurrently.
+
+    :param str structure_dir: The directory containing the structure's micrographs and STAR file.
+    :param int box_size: The box size in pixels for the cropped particles.
+    :param float pixelsize: Pixel size of the micrographs.
+    :param int num_cpus: Number of CPU cores for parallel processing if GPUs are not used.
+    :param int max_crop_particles: The maximum number of particles to crop from the micrographs.
+    :param bool use_gpu: Whether to use GPU for processing.
+    :param list gpu_ids: List of GPU IDs to use for processing.
+    :return int: Total number of particles cropped from the micrographs.
+    """
+    print_and_log("", logging.DEBUG)
+    total_cropped = 0
+    with cp.cuda.Device(gpu_id):
+        for micrograph_path, particle_rows in zip(micrograph_paths, particle_rows_list):
+            with mrcfile.open(micrograph_path, permissive=True) as mrc:
+                micrograph_data = cp.asarray(mrc.data)
+                cropped_count = 0
+                for _, row in particle_rows.iterrows():
+                    if max_crop_particles and cropped_count >= max_crop_particles:
+                        break
+                    x, y = int(row['coord_x']), int(row['coord_y'])
+                    half_box_size = box_size // 2
+
+                    if x - half_box_size < 0 or y - half_box_size < 0 or x + half_box_size > micrograph_data.shape[1] or y + half_box_size > micrograph_data.shape[0]:
+                        continue
+
+                    cropped_particle = micrograph_data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
+                    particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
+                    writemrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
+                    cropped_count += 1
+                total_cropped += cropped_count
+
+    return total_cropped
+
 def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles):
     """
     Crops particles from a single micrograph.
@@ -3035,6 +3108,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixe
     :param int box_size: The box size in pixels for the cropped particles.
     :param float pixelsize: Pixel size of the micrograph.
     :param int max_crop_particles: The maximum number of particles to crop from the micrograph.
+    :return int: Total number of particles cropped from the micrograph.
 
     This function writes .mrc files to the disk.
     """
@@ -3057,18 +3131,21 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixe
 
     return cropped_count
 
-def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, num_cpus, max_crop_particles):
+def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop_particles, num_cpus, use_gpu, gpu_ids):
     """
     Crops particles from micrographs based on coordinates specified in a micrograph STAR file
-    and saves them with a specified box size. This function operates in parallel, using a specified
-    number of CPU cores to process different micrographs concurrently.
+    and saves them with a specified box size. This function operates in parallel, using multiple GPUs
+    or multiple CPU cores to process different micrographs concurrently.
 
     :param str structure_dir: The directory containing the structure's micrographs and STAR file.
     :param int box_size: The box size in pixels for the cropped particles. If None, the function
                          will dynamically determine the box size from the .mrc map used for projections.
     :param float pixelsize: Pixel size of the micrographs.
-    :param int num_cpus: Number of CPU cores for parallel processing. If unspecified, all cores are used.
     :param int max_crop_particles: The maximum number of particles to crop from the micrographs.
+    :param int num_cpus: Number of CPU cores for parallel processing if GPUs are not used.
+    :param bool use_gpu: Whether to use GPU for processing.
+    :param list gpu_ids: List of GPU IDs to use for processing.
+    :return int: Total number of particles cropped from the micrographs.
 
     Notes:
     - Particles whose specified box would extend beyond the micrograph boundaries are not cropped.
@@ -3088,21 +3165,53 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, num_cpus
     grouped_df = df.groupby('micrograph_name')
     total_cropped = 0
 
-    # Use the user-defined number of CPUs for parallel processing
-    with ProcessPoolExecutor(max_workers=num_cpus) as executor:
-        futures = []
-        for micrograph_name, particle_rows in grouped_df:
-            micrograph_path = os.path.join(micrograph_name)
-            if not os.path.exists(micrograph_path):
-                print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
-                continue
+    if use_gpu and gpu_ids:
+        batch_sizes = {}
+        for gpu_id in gpu_ids:
+            utilization = get_gpu_utilization(gpu_id)
+            batch_size = get_max_batch_size(box_size * box_size * 4, utilization['free_mem'])  # * 4 is because each pixel takes 4 bytes for float32
+            batch_sizes[gpu_id] = {'batch_size': batch_size, 'core_usage': utilization['core_usage']}
 
-            print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
-            future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles)
-            futures.append(future)
+        micrograph_list = list(grouped_df.groups.keys())
+        start = 0
+        while start < len(micrograph_list):
+            sorted_gpus = sorted(batch_sizes.items(), key=lambda x: x[1]['core_usage'])
+            for gpu_id, batch_info in sorted_gpus:
+                end = start + batch_info['batch_size']
+                batch_micrographs = micrograph_list[start:end]
+                if not batch_micrographs:
+                    break
+                with cp.cuda.Device(gpu_id):
+                    batch_paths = []
+                    batch_particle_rows = []
+                    for micrograph_name in batch_micrographs:
+                        particle_rows = grouped_df.get_group(micrograph_name)
+                        micrograph_path = os.path.join(micrograph_name)
+                        if not os.path.exists(micrograph_path):
+                            print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
+                            continue
+                        print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
+                        batch_paths.append(micrograph_path)
+                        batch_particle_rows.append(particle_rows)
+                    total_cropped += crop_particles_gpu_batch(batch_paths, batch_particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id)
+                start = end
+                if start >= len(micrograph_list):
+                    break
+    else:
+        with ProcessPoolExecutor(max_workers=num_cpus) as executor:
+            futures = []
+            for micrograph_name, particle_rows in grouped_df:
+                micrograph_path = os.path.join(micrograph_name)
+                if not os.path.exists(micrograph_path):
+                    print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
+                    continue
 
-        for future in futures:
-            total_cropped += future.result()
+                print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...", logging.INFO)
+                future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles)
+                futures.append(future)
+
+            for future in futures:
+                total_cropped += future.result()
 
     return total_cropped
 
@@ -3485,7 +3594,7 @@ def main():
             crop_tasks = []
             for structure_name in structure_names:
                 box_size = args.box_size if args.box_size is not None else box_size
-                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.apix, args.cpus, args.max_crop_particles)
+                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.apix, args.max_crop_particles, args.cpus, args.use_gpu, args.gpu_ids)
                 crop_tasks.append(crop_task)
 
             for crop_task in crop_tasks:
