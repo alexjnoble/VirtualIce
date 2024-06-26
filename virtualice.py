@@ -270,6 +270,13 @@ def parse_arguments(script_start_time):
      Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
      Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
      Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
+
+  3. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,0,90] [90 180 0] -aa l h r -ne --use_cpu -V 2 -3
+     Generates 5 random micrographs of PDB 1PMA (proteasome) with preferred orientation for 90% of particles. The preferred orientations are defined
+     by random selections of [*,0,90] (free to rotate along the first Z axis, then do not rotate in Y, then rotate 90 degrees in Z) and
+     [90 180 0] (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then do not rotate in Z). The aggregation amount is
+     randomly chosen from low and high values for each of the 5 micrographs. Edge particles are not included. Only CPUs are used (no GPUs).
+     Terminal verbosity is set to 2. The resulting micrographs are opened with 3dmod after generation.
     """,
     formatter_class=argparse.RawDescriptionHelpFormatter)  # Preserves whitespace for better formatting
 
@@ -308,7 +315,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
     simulation_group.add_argument("-ro", "--reorient_mrc", action="store_true", help="Reorient the MRC file (either provided as a .mrc file or requested from EMDB) so that the structure's principal axes align with the coordinate axes. Note: .pdb files are automatically reoriented, EMDB files are often too big to do so quickly. Default is %(default)s")
     simulation_group.add_argument("-om", "--orientation_mode", type=str, choices=['random', 'uniform', 'preferred'], default='random', help="Orientation mode for projections. Options are: random, uniform, preferred. Default is %(default)s")
-    simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90, 0, 0]' or '[*, 0, 90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
+    simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90,0,0]' or '[*,0,90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
     simulation_group.add_argument("-av", "--angle_variation", type=float, default=5.0, help="Standard deviation for normal distribution of variations around preferred angles (in degrees). Default is %(default)s")
     simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.8, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
     simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 CTF option). Default is %(default)s (ie. 10%%)")
@@ -1779,13 +1786,11 @@ def parallel_downsample(image_directory, downsample_factor, pixelsize, cpus, use
                 if start >= len(image_paths):
                     break
     else:
-        # Create a pool of worker processes
-        pool = Pool(processes=cpus)
         # Downsample each micrograph by processing each image path in parallel
+        pool = Pool(processes=cpus)
         pool.starmap(downsample_micrograph, [(image_path, downsample_factor, pixelsize, use_gpu) for image_path in image_paths])
-        # Close the pool to prevent any more tasks from being submitted
+        # Close the pool to prevent any more tasks from being submitted and wait for all worker processes to finish
         pool.close()
-        # Wait for all worker processes to finish
         pool.join()
 
 def downsample_star_file(input_star, output_star, downsample_factor):
@@ -1981,17 +1986,46 @@ def trim_vol_determine_particle_numbers(input_mrc, input_micrograph, scale_perce
 def parse_preferred_angles(preferred_angles):
     """
     Parse a list of preferred angles into a structured format.
+    This function allows the user to input angles in any combination of these formats:
+    [0,180,90] [0 180 90] [0, 180, 90]
 
-    :param list_of_str preferred_angles: List of preferred angles in string format.
+    :param list preferred_angles: List of strings representing preferred angles.
     :return list_of_tuples: List of preferred angles in numeric format.
     """
-    print_and_log("", logging.DEBUG)
     parsed_angles = []
-    for angle_set in preferred_angles:
-        angles = angle_set.strip('[]').split(',')
-        angles = [angle.strip() for angle in angles]
-        parsed_angles.append(tuple(angles))
-    return parsed_angles
+    current_angle_set = []
+
+    for item in preferred_angles:
+        if item.startswith('[') and item.endswith(']'):
+            # Handle complete angle sets like '[0,180,0]'
+            angles = item.strip('[]').split(',')
+            parsed_angles.append(tuple(angle.strip() for angle in angles))
+        elif item.startswith('['):
+            if current_angle_set:
+                parsed_angles.append(tuple(current_angle_set))
+                current_angle_set = []
+            current_angle_set.append(item.lstrip('['))
+        elif item.endswith(']'):
+            current_angle_set.append(item.rstrip(']'))
+            parsed_angles.append(tuple(current_angle_set))
+            current_angle_set = []
+        else:
+            current_angle_set.append(item)
+
+    if current_angle_set:
+        parsed_angles.append(tuple(current_angle_set))
+
+    # Clean up each angle in the sets
+    cleaned_angles = []
+    for angle_set in parsed_angles:
+        cleaned_set = []
+        for angle in angle_set:
+            cleaned_angle = re.sub(r'[,\s]+', '', angle).strip()
+            if cleaned_angle:
+                cleaned_set.append(cleaned_angle)
+        cleaned_angles.append(tuple(cleaned_set))
+
+    return cleaned_angles
 
 def generate_orientations(preferred_angles, angle_variation, num_preferred, num_random):
     """
@@ -3542,9 +3576,8 @@ def view_in_3dmod_async(micrograph_files):
 
 def main():
     """
-    Main function. Loops over all structures and calls generate_micrographs for each structure,
-    then optionally crops each particle from each micrograph, then prints the run time and file
-    output information and optionally opens the micrographs for viewing in 3dmod.
+    Main function: Loops over structures, generates micrographs, optionally crops particles,
+    optionally opens micrographs in 3dmod asynchronously, and prints run time & output information.
     """
     start_time = time.time()
     start_time_formatted = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(start_time))
@@ -3558,20 +3591,19 @@ def main():
     total_number_of_particles_with_saved_coordinates = 0
     total_cropped_particles = 0
     with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
-        # Prepare a list of tasks
+        # Store structure_names and tasks (ie. results)
         structure_names = []
         tasks = []
         for structure_index, structure_input in enumerate(args.structures):
             result = process_structure_input(structure_input, args.max_emdb_size, args.std_threshold, args.apix)
             if result:  # Check if result is not None
                 structure_name, structure_type = result  # Now we're sure structure_name and structure_type are valid
-                # Submit each task for execution
                 task = executor.submit(generate_micrographs, args, structure_name, structure_type, structure_index, total_structures)
-                tasks.append((task, structure_name))  # Store task with its associated structure_name
+                tasks.append((task, structure_name))  # Store task and associated structure_name
             else:
-                print_and_log(f"Skipping structure due to an error or non-existence: {structure_input} (if you're trying to get a random structure, use the `-s r` flag)", logging.WARNING)
+                print_and_log(f"Skipping structure (error or non-existence): {structure_input} (use `-s r` for a random structure)", logging.WARNING)
 
-        # Wait for all tasks to complete, aggregate results, and crop particles if requested
+        # Wait for all tasks to complete and aggregate results
         for task, structure_name in tasks:
             structure_names.append(structure_name)
             num_particles_projected, num_particles_with_saved_coordinates, box_size = task.result()
@@ -3581,14 +3613,13 @@ def main():
     for structure_name in structure_names:
         clean_up(args, structure_name)
 
-    # Open 3dmod if the argument is set
+    # Open 3dmod asynchronously in a separate thread so cropping can happen simultaneously
     if args.view_in_3dmod:
         micrograph_files = find_micrograph_files(structure_names)
         if micrograph_files:
-            # Start 3dmod asynchronously in a separate thread so cropping can happen simultaneously
             threading.Thread(target=view_in_3dmod_async, args=(micrograph_files,)).start()
 
-    # Check if cropping is enabled and perform cropping
+    # Crop particles if requested
     if args.crop_particles:
         with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
             crop_tasks = []
