@@ -14,13 +14,15 @@ VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buf
 - Multi-core processing.
 - Extensive customization options including particle distribution, ice thickness, and microscope parameters.
 
-## Installation
+## Requirements and Installation
 
 VirtualIce requires Python 3, EMAN2, IMOD, and several dependencies, which can be installed using pip:
 
 ```bash
 pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 ```
+
+To use VirtualIce, download the virtualice.py file directly and place it in your working directory or environment for use. Make it executable on Linux with this command: `chmod +x virtualice.py`.
 
 ## Usage
 
