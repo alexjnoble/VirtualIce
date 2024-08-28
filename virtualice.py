@@ -762,7 +762,7 @@ def download_pdb(pdb_id, suppress_errors=False):
         os.rename(symmetrized_pdb_path, regular_pdb_path)
 
     sample_name = get_pdb_sample_name(pdb_id)
-    print_and_log(f"Sample name: {sample_name}\n")
+    print_and_log(f"[{pdb_id}] Sample name: {sample_name}\n")
 
     return True
 
@@ -859,7 +859,7 @@ def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
 
         print_and_log(f"Download and decompression complete for EMD-{emdb_id}.")
         sample_name = get_emdb_sample_name(emdb_id)
-        print_and_log(f"Sample name: {sample_name}\n")
+        print_and_log(f"[{emdb_id}] Sample name: {sample_name}\n")
         return True
     except error.HTTPError as e:
         if not suppress_errors:
@@ -932,13 +932,15 @@ def process_structure_input(structure_input, max_emdb_size, std_devs_above_mean,
     elif structure_input.lower() == 're' or structure_input.lower() == 'rm':
         return download_random_emdb_structure(max_emdb_size)
     elif is_local_pdb_path(structure_input):
-        print_and_log(f"Using local PDB file: {structure_input}", logging.WARNING)
+        structure_name = os.path.basename(structure_input).split('.')[0]
+        print_and_log(f"[{structure_name}] Using local PDB file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
         full_path = os.path.join(os.pardir, structure_input)
         shutil.copy(full_path, os.path.basename(structure_input))
         return (os.path.basename(structure_input).split('.')[0], "pdb")
     elif is_local_mrc_path(structure_input):
-        print_and_log(f"Using local MRC/MAP file: {structure_input}", logging.WARNING)
+        structure_name = os.path.basename(structure_input).split('.')[0]
+        print_and_log(f"[{structure_name}] Using local MRC/MAP file: {structure_input}", logging.WARNING)
         # Make a local copy of the file
         full_path = os.path.join(os.pardir, structure_input)
         shutil.copy(full_path, os.path.basename(structure_input))
@@ -950,7 +952,10 @@ def process_structure_input(structure_input, max_emdb_size, std_devs_above_mean,
         else:
             return None
     elif is_pdb_id(structure_input):
+        structure_name = structure_input
         if download_pdb(structure_input):
+            print_and_log(f"[{structure_name}] Sample name: {get_pdb_sample_name(structure_input)}")
+            print_and_log(f"[{structure_name}] Converting PDB to MRC...")
             return (structure_input, "pdb")
         else:
             print_and_log(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
@@ -1120,8 +1125,6 @@ def reorient_mrc(input_mrc_path):
         if 0 <= new_coord[0] < reoriented_data.shape[0] and 0 <= new_coord[1] < reoriented_data.shape[1] and 0 <= new_coord[2] < reoriented_data.shape[2]:
             reoriented_data[new_coord[0], new_coord[1], new_coord[2]] = data[original_coord[0], original_coord[1], original_coord[2]]
 
-    print_and_log("Reoriented MRC")
-
     return reoriented_data
 
 def convert_pdb_to_mrc(pdb_name, apix, res):
@@ -1137,17 +1140,17 @@ def convert_pdb_to_mrc(pdb_name, apix, res):
     This function writes a .pdb file to the disk.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"Converting PDB {pdb_name} to MRC using EMAN2's e2pdb2mrc.py...")
+    print_and_log(f"[{pdb_name}]Converting PDB to MRC using EMAN2's e2pdb2mrc.py...")
     cmd = ["e2pdb2mrc.py", "--apix", str(apix), "--res", str(res), "--center", f"{pdb_name}.pdb", f"{pdb_name}.mrc"]
     output = subprocess.run(cmd, capture_output=True, text=True)
-    print_and_log(output)
+    print_and_log(output, logging.DEBUG)
     try:
         # Attempt to extract the mass from the output
         mass = int([line for line in output.stdout.split("\n") if "mass of" in line][0].split()[-2])
     except IndexError:
         # If the mass is not found in the output, set it to 0 and print a warning
         mass = 0
-        print_and_log(f"Warning: Mass not found for PDB {pdb_name}. Setting mass to 0.", logging.WARNING)
+        print_and_log(f"[{pdb_name}]Warning: Mass not found for PDB. Setting mass to 0.", logging.WARNING)
     return mass
 
 def readmrc(mrc_path):
@@ -1513,7 +1516,6 @@ def extend_and_shuffle_image_list(num_images, image_list_file):
     :return list: A list of selected ice micrograph filenames and defoci.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"Selecting {num_images} random ice micrographs...")
     # Read the list of available micrographs and their defoci
     with open(image_list_file, "r") as f:
         image_list = [line.strip() for line in f.readlines() if line.strip()]
@@ -1604,6 +1606,7 @@ def get_gpu_utilization(gpu_id):
     :param int gpu_id: The ID of the GPU to query.
     :return dict: Dictionary containing free memory and core usage percentage.
     """
+    print_and_log("", logging.DEBUG)
     gpu_stats = gpustat.GPUStatCollection.new_query()
     gpu = gpu_stats[gpu_id]
     free_mem = gpu.memory_free
@@ -1749,7 +1752,6 @@ def parallel_downsample_micrographs(image_directory, downsample_factor, pixelsiz
     :param list gpu_ids: List of GPU IDs to use for processing.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"Binning/Downsampling micrographs by {downsample_factor} by Fourier cropping...\n")
     image_extensions = ['.mrc', '.png', '.jpeg']
     image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
@@ -1973,18 +1975,21 @@ def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_perce
 
     return trimmed_mrc_array, rand_num_particles, max_num_particles
 
-def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts):
+def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context):
     """
-    Determine ice and particle behaviors: First trim the volume and determing possible numbers of particles,
-    then determing ice thickness, then determing particle distribution, then determine particle aggregation.
+    Determine ice and particle behaviors: First trim the volume and determine possible numbers of particles,
+    then determine ice thickness, then determine particle distribution, then determine particle aggregation.
 
     :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
     :param numpy_array structure: 3D numpy array of the structure for which to generate projections.
+    :param numpy_array micrograph: 2D numpy array representing the ice micrograph.
     :param float ice_scaling_fudge_factor: Fudge factor for making particles look dark enough.
-    :param list remaining_aggregation_amounts: Keep track of aggregation_amounts to not repeat them.
+    :param list remaining_aggregation_amounts: Keep track of aggregation amounts to not repeat them.
+    :param str context: Context string for print statements (structure name and micrograph number).
+    :return tuple: ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"Trimming the mrc...")
+    print_and_log(f"{context} Trimming the mrc...")
     # Set `num_particles` based on the user input (args.num_particles) with the following rules:
     # 1. If the user provides a value for `args.num_particles` and it is <= the `max_num_particles`, use it.
     # 2. If the user does not provide a value, use `rand_num_particles`.
@@ -1997,9 +2002,9 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
              max_num_particles)
 
     if args.num_particles:
-        print_and_log(f"Attempting to find {int(num_particles)} particle locations in the micrograph...")
+        print_and_log(f"{context} Attempting to find {int(num_particles)} particle locations in the micrograph...")
     else:
-        print_and_log("Choosing a random number of particles to add to the micrograph...")
+        print_and_log(f"{context} Choosing a random number of particles to add to the micrograph...")
 
     # Random or user-specified ice thickness
     # Adjust the relative ice thickness to work mathematically
@@ -2040,7 +2045,7 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
                 # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                 num_particles = max(num_particles // 4, 2)
 
-    print_and_log(f"{num_particles} particles will be added to the micrograph")
+    print_and_log(f"{context} {num_particles} particles will be added to the micrograph")
 
     if args.aggregation_amount:
         if not remaining_aggregation_amounts:
@@ -2868,39 +2873,18 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
 
     return collage
 
-def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options):
+def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
 
-    The input options include these parameters:
-    :param numpy_array large_image: The large image where small images will be blended into.
-    :param numpy_array small_images: The list of small images or particles to be blended.
-    :param float scale_percent: The percentage to scale the volume for trimming.
-    :param int half_small_image_width: Half the width of a small image.
-    :param list_of_tuples particle_locations: The locations of the particles within the large image.
-    :param int border_distance: The minimum distance between particles and the image border.
-    :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
-    :param float scale: The scale factor to adjust the intensity of the particles.
-    :param str structure_name: The name of the structure file.
-    :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
-    :param bool coord_coordinate_file: Boolean for whether or not to output a .coord coordinate file.
-    :param str large_image_path: The path of the micrograph.
-    :param str image_path: The output path.
-    :param numpy_array (optional) prob_map: A 2D numpy array representing the probability map
-        used for local scaling of the collage. Each value in this map should be in the
-        range [0, 1], where 0 represents the minimum scaling effect (darkest or thinnest
-        ice) and 1 represents the maximum scaling effect (brightest or thickest ice). If
-        provided, it modulates the scaling of the collage to simulate variations in
-        particle visibility according to the underlying micrograph features. If `None`, a
-        uniform scale is applied to the entire collage.
-    :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
-    :param int json_scale: Binning factor used when labeling junk to create the json file.
-    :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
-    :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
-    :param int polygon_expansion_distance: Distance by which to expand the polygons.
-    :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
-    :return numpy_array list_of_tuples: The blended large image, and the filtered particle locations.
+    :param dict input_options: Dictionary of input options, including large_image, small_images, etc.
+    :param dict particle_and_micrograph_generation_options: Dictionary of particle and micrograph generation options.
+    :param dict simulation_options: Dictionary of simulation options.
+    :param dict junk_labels_options: Dictionary of options for junk labels.
+    :param dict output_options: Dictionary of output options.
+    :param str context: Context string for print statements (structure name and micrograph number).
+    :return tuple: The blended large image, and the filtered particle locations.
     """
     print_and_log("", logging.DEBUG)
     # Extract input options
@@ -2951,12 +2935,12 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
             # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
             filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-            print_and_log(f"{num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) based on the JSON file.")
+            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) based on the JSON file.")
         else:
-            print_and_log(f"No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
+            print_and_log(f"{context} No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
             filtered_particle_locations = particle_locations
     else:
-        print_and_log("Skipping junk filtering (ie. not using JSON file)")
+        print_and_log(f"{context} Skipping junk filtering (ie. not using JSON file)")
         filtered_particle_locations = particle_locations
 
     # Remove edge particles from coordinate files if requested
@@ -2981,9 +2965,9 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
 
         num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
         if num_particles_removed > 0:
-            print_and_log(f"{num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) due to being too close to the edge.")
+            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) due to being too close to the edge.")
         else:
-            print_and_log("0 particles removed from coordinate file(s) due to being too close to the edge.")
+            print_and_log(f"{context} 0 particles removed from coordinate file(s) due to being too close to the edge.")
 
         # Use the remaining locations for further processing
         filtered_particle_locations = remaining_particle_locations
@@ -3009,35 +2993,17 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
 
     return blended_image, filtered_particle_locations
 
-def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options):
+def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
     The input options include these parameters:
-    :param str large_image_path: The file path of the large image or micrograph.
-    :param numpy_array large_image: The large image.
-    :param str small_images: The file path of the small images or particles.
-    :param float scale_percent: The percentage to scale the volume for trimming.
-    :param str structure_name: The name of the structure file.
-    :param int border_distance: The minimum distance between particles and the image border.
-    :param bool no_edge_particles: Allow particles to be placed up to the edge of the micrograph.
-    :param bool save_edge_coordinates: Save particle coordinates that are closer than half a particle box size from the edge.
-    :param float scale: The scale factor to adjust the intensity of the particles. Adjusted based on ice_thickness parameters.
-    :param str output_path: The file path to save the resulting micrograph.
-    :param str dist_type: The type of distribution (random or non_random) for placing particles in micrographs.
-    :param str non_random_dist_type: non_random distribution (circular, inverse_circular, gaussian, micrograph) for placing particles in micrographs.
-    :param bool imod_coordinate_file: Boolean for whether or not to output an IMOD .mod coordinate file.
-    :param bool coord_coordinate_file: Boolean for whether or not to output a .coord coordinate file.
-    :param bool no_junk_filter: Boolean for whether or not to filter junk from coordinate file locations.
-    :param float json_scale: Binning factor used when labeling junk to create the json file.
-    :param bool flip_x: Boolean to determine if the x-coordinates should be flipped.
-    :param bool flip_y: Boolean to determine if the y-coordinates should be flipped.
-    :param float polygon_expansion_distance: Number of pixels to expand polygon exclusion areas in the json file.
-    :param float gaussian_variance: Standard deviation of the Gaussian noise, as measured previously from the ice image.
-    :param bool save_as_mrc: Boolean to save the resulting synthetic micrograph and an MRC file.
-    :param bool save_as_png: Boolean to save the resulting synthetic micrograph and an PNG file.
-    :param bool save_as_jpeg: Boolean to save the resulting synthetic micrograph and an JPEG file.
-    :param int jpeg_quality: Quality of the JPEG image.
+    :param dict input_options: Dictionary of input options, including large_image, small_images, etc.
+    :param dict particle_and_micrograph_generation_options: Dictionary of particle and micrograph generation options.
+    :param dict simulation_options: Dictionary of simulation options.
+    :param dict junk_labels_options: Dictionary of options for junk labels.
+    :param dict output_options: Dictionary of output options.
+    :param str context: Context string for print statements (structure name and micrograph number).
     :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
 
     This function writes a .mrc/.png/.jpeg file to the disk.
@@ -3102,27 +3068,27 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
+        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context)
     else:
-        print_and_log(f"Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...")
+        print_and_log(f"{context} Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...")
         input_options['small_images'] = small_images[:len(particle_locations), :, :]
-        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
+        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
-        print_and_log(f"\nWriting synthetic micrograph: {output_path}.mrc...")
+        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.mrc...")
         writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
     if save_as_png:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\nWriting synthetic micrograph: {output_path}.png...")
+        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.png...")
         cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
     if save_as_jpeg:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\nWriting synthetic micrograph: {output_path}.jpeg...")
+        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.jpeg...")
         cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
 
     return len(particle_locations), len(filtered_particle_locations)
@@ -3256,7 +3222,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
       necessary coordinates for cropping.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"\nCropping particles for {structure_dir}...\n")
+    print_and_log(f"\n[{structure_dir}] Cropping particles...\n")
     particles_dir = os.path.join(structure_dir, 'Particles/')
     os.makedirs(particles_dir, exist_ok=True)
 
@@ -3292,7 +3258,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
                         if not os.path.exists(micrograph_path):
                             print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
                             continue
-                        print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...")
+                        print_and_log(f"[{structure_dir}] Extracting {len(particle_rows)} particles for {micrograph_name}...")
                         batch_paths.append(micrograph_path)
                         batch_particle_rows.append(particle_rows)
                     total_cropped += crop_particles_gpu_batch(batch_paths, batch_particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id)
@@ -3308,7 +3274,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
                     print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
                     continue
 
-                print_and_log(f"Extracting {len(particle_rows)} particles for {micrograph_name}...")
+                print_and_log(f"[{structure_dir}] Extracting {len(particle_rows)} particles for {micrograph_name}...")
                 future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles)
                 futures.append(future)
 
@@ -3318,7 +3284,7 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
     return total_cropped
 
 def process_single_micrograph(args, structure_name, structure, line, total_structures, structure_index,
-                              micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts):
+                              micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts, micrograph_number):
     """
     Process a single micrograph for a given structure.
 
@@ -3331,8 +3297,10 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     :param dict micrograph_usage_count: Dictionary to keep track of the usage count of each unique micrograph.
     :param float ice_scaling_fudge_factor: Fudge factor for making particles look dark enough.
     :param list remaining_aggregation_amounts: List to track remaining aggregation amounts.
+    :param int micrograph_number: Current micrograph number (1-indexed).
     :return int int: Number of particles projected, number of particles with saved coordinates.
     """
+    print_and_log("", logging.DEBUG)
     # Parse the 'micrograph_name.mrc defocus' line
     fname, defocus = line.strip().split()[:2]
     fname = os.path.splitext(os.path.basename(fname))[0]
@@ -3343,6 +3311,9 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     # Generate the repeat number suffix for the filename
     repeat_suffix = f"_{micrograph_usage_count[fname]}" if micrograph_usage_count[fname] > 1 else ""
 
+    # Add context for printout
+    context = f"[{structure_name} | {micrograph_number}/{args.num_images}]"
+
     num_hyphens = '-' * (55 + len(f"{structure_index + 1}{total_structures}{structure_name}{fname}"))
     print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
     print_and_log(f"Generating synthetic micrograph using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
@@ -3350,14 +3321,14 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
 
     # Determine ice and particle behavior parameters
     ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
-        args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts)
+        args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context)
 
     # Generate projections with the specified orientation mode
-    print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...")
+    print_and_log(f"{context} Projecting the structure volume ({structure_name}) {num_particles} times...")
     particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles,
                                                    args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
 
-    print_and_log(f"Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frames...")
+    print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frames...")
     mean, gaussian_variance = estimate_noise_parameters(micrograph)
     if args.use_gpu:
         noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
@@ -3366,11 +3337,11 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
                                             args.dose_c, args.apix, args.cpus)
 
-    print_and_log(f"Applying CTF based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
+    print_and_log(f"{context} Applying CTF based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
     noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor,
                                                 args.apix, args.Cs, args.voltage, args.cpus)
 
-    print_and_log(f"Adding {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
+    print_and_log(f"{context} Adding {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
 
     # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
     input_options = {
@@ -3410,7 +3381,7 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     }
 
     num_particles_projected, num_particles_with_saved_coordinates = add_images(input_options, particle_and_micrograph_generation_options,
-                                                                               simulation_options, junk_labels_options, output_options)
+                                                                               simulation_options, junk_labels_options, output_options, context)
 
     return num_particles_projected, num_particles_with_saved_coordinates
 
@@ -3438,23 +3409,27 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
     # Convert PDB to MRC for PDBs and return the mass or estimate the mass of the MRC
     if structure_type == "pdb":
+        print_and_log(f"[{structure_name}] Converting PDB to MRC...")
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
         structure = reorient_mrc(f'{structure_name}.mrc')
-        print_and_log(f"Mass of PDB {structure_name}: {mass} kDa")
+        print_and_log(f"[{structure_name}] Reoriented MRC")
+        print_and_log(f"[{structure_name}] Mass of PDB: {mass} kDa")
         ice_scaling_fudge_factor = 4.8  # Note: larger number = darker particles
     elif structure_type == "mrc":
         mass = int(estimate_mass_from_map(structure_name))
         if args.reorient_mrc:
             structure = reorient_mrc(f'{structure_name}.mrc')  # It's very slow for EMDB maps...
+            print_and_log(f"[{structure_name}] Reoriented MRC")
         else:
             structure = readmrc(f'{structure_name}.mrc')
-        print_and_log(f"Estimated mass of MRC {structure_name}: {mass} kDa")
+        print_and_log(f"[{structure_name}] Estimated mass of MRC: {mass} kDa")
         ice_scaling_fudge_factor = 2.9
 
     # Write STAR header for the current synthetic dataset
     write_star_header(structure_name, args.apix, args.voltage, args.Cs)
 
     # Shuffle and possibly extend the ice images
+    print_and_log(f"[{structure_name}] Selecting {args.num_images} random ice micrographs...")
     selected_images = extend_and_shuffle_image_list(args.num_images, args.image_list_file)
 
     # Main Loop
@@ -3471,10 +3446,11 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
             futures = []
             
             # Iterate over the selected_images
-            for line in selected_images:
+            for i, line in enumerate(selected_images):
                 # Submit each micrograph generation task to the executor
                 future = executor.submit(process_single_micrograph, args, structure_name, structure, line, total_structures,
-                                         structure_index, micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts)
+                                         structure_index, micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts,
+                                         i + 1)  # Pass the current micrograph number (1-indexed)
                 futures.append(future)
             
             # Iterate over the completed tasks
@@ -3485,15 +3461,16 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
                 total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
     else:
         # If no parallelization is requested, process each micrograph sequentially
-        for line in selected_images:
+        for i, line in enumerate(selected_images):
             num_particles_projected, num_particles_with_saved_coordinates = process_single_micrograph(
                 args, structure_name, structure, line, total_structures, structure_index, micrograph_usage_count,
-                ice_scaling_fudge_factor, remaining_aggregation_amounts)
+                ice_scaling_fudge_factor, remaining_aggregation_amounts, i + 1)  # Pass the current micrograph number (1-indexed)
             total_num_particles_projected += num_particles_projected
             total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
     # Downsample micrographs and coordinate files
     if args.binning > 1:
+        print_and_log(f"[{structure_name}] Binning/Downsampling micrographs by {downsample_factor} by Fourier cropping...\n")
         parallel_downsample_micrographs(f"{structure_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
         downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
     else:
@@ -3524,7 +3501,7 @@ def clean_up(args, structure_name):
     print_and_log("", logging.DEBUG)
     if args.binning > 1:
         if not args.keep:
-            print_and_log("Removing non-downsamlpled micrographs...")
+            print_and_log(f"[{structure_name}] Removing non-downsamlpled micrographs...")
             bin_dir = f"{structure_name}/bin_{args.binning}/"
 
             # Delete the non-downsampled micrographs and coordinate files
