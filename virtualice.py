@@ -302,7 +302,7 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise and optionally apply dose damaging. Default is %(default)s")
     particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non_random', 'm', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
-    particle_micrograph_group.add_argument("-aa", "--aggregation_amount", nargs='+', default=['low', 'random'], help="Amount of particle aggregation. Aggregation amounts can be set per-run or per-micrograph. To set per-run, input 0-10, 'low', 'medium', 'high', or 'random'. To set multiple aggregation amounts that will be chose randomly per-micrograph, input combinations like 'low medium', 'low high', '2 5', or 'low 3 9 10'. To set random aggregation amounts within a range, append any word input combination with 'random', like 'random random' to give the full range, or 'low medium random' to give a range from 0 to 6.7. Default is %(default)s")
+    particle_micrograph_group.add_argument("-aa", "--aggregation_amount", nargs='+', default=['low', 'random'], help="Amount of particle aggregation. Aggregation amounts can be set per-run or per-micrograph. To set per-run, input 0-10, 'low', 'medium', 'high', or 'random'. To set multiple aggregation amounts that will be chose randomly per-micrograph, input combinations like 'low medium', 'low high', '2 5', or 'low 3 9 10'. To set random aggregation amounts within a range, append any word input combination with 'random', like 'random random' to give the full range, or 'low medium random' to give a range from 0 to 6.7. Abbreviations work too, like '3.2 l h r'. Default is %(default)s")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("-ne", "--no_edge_particles", action="store_true", help="Prevent particles from being placed up to the edge of the micrograph. By default, particles can be placed up to the edge.")
     particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
@@ -493,7 +493,7 @@ def parse_arguments(script_start_time):
     print_and_log(f"\033[1m{'-' * 80}\033[0m\n", logging.WARNING)
 
     # This is put after the printout because it can create large lists depending on user input
-    args.aggregation_amount = parse_aggregation_amount(args.aggregation_amount, args.num_images)
+    args.aggregation_amount = parse_aggregation_amount(args.aggregation_amount, args.num_images * len(args.structures))
 
     return args
 
@@ -3317,6 +3317,103 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
 
     return total_cropped
 
+def process_single_micrograph(args, structure_name, structure, line, total_structures, structure_index,
+                              micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts):
+    """
+    Process a single micrograph for a given structure.
+
+    :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
+    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
+    :param numpy_array structure: The 3D numpy array of the structure.
+    :param str line: The line containing the micrograph name and defocus value.
+    :param int total_structures: Total number of structures requested.
+    :param int structure_index: Index of the current structure.
+    :param dict micrograph_usage_count: Dictionary to keep track of the usage count of each unique micrograph.
+    :param float ice_scaling_fudge_factor: Fudge factor for making particles look dark enough.
+    :param list remaining_aggregation_amounts: List to track remaining aggregation amounts.
+    :return int int: Number of particles projected, number of particles with saved coordinates.
+    """
+    # Parse the 'micrograph_name.mrc defocus' line
+    fname, defocus = line.strip().split()[:2]
+    fname = os.path.splitext(os.path.basename(fname))[0]
+    micrograph = readmrc(f"{args.image_directory}/{fname}.mrc")
+    
+    # Track each micrograph's usage count for naming purposes
+    micrograph_usage_count[fname] = micrograph_usage_count.get(fname, 0) + 1
+    # Generate the repeat number suffix for the filename
+    repeat_suffix = f"_{micrograph_usage_count[fname]}" if micrograph_usage_count[fname] > 1 else ""
+
+    num_hyphens = '-' * (55 + len(f"{structure_index + 1}{total_structures}{structure_name}{fname}"))
+    print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
+    print_and_log(f"Generating synthetic micrograph using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
+    print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
+
+    # Determine ice and particle behavior parameters
+    ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
+        args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts)
+
+    # Generate projections with the specified orientation mode
+    print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...")
+    particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles,
+                                                   args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
+
+    print_and_log(f"Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frames...")
+    mean, gaussian_variance = estimate_noise_parameters(micrograph)
+    if args.use_gpu:
+        noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
+                                                args.dose_c, args.apix, args.gpu_ids)
+    else:
+        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
+                                            args.dose_c, args.apix, args.cpus)
+
+    print_and_log(f"Applying CTF based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
+    noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor,
+                                                args.apix, args.Cs, args.voltage, args.cpus)
+
+    print_and_log(f"Adding {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
+
+    # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
+    input_options = {
+        'large_image_path': f"{args.image_directory}/{fname}.mrc",
+        'large_image': micrograph,
+        'small_images': noisy_particles_CTF,
+        'pixelsize': args.apix,
+        'structure_name': structure_name,
+        'orientations': orientations
+    }
+    particle_and_micrograph_generation_options = {
+        'scale_percent': args.scale_percent,
+        'dist_type': dist_type,
+        'non_random_dist_type': non_random_dist_type,
+        'border_distance': args.border,
+        'no_edge_particles': args.no_edge_particles,
+        'save_edge_coordinates': args.save_edge_coordinates,
+        'gaussian_variance': gaussian_variance,
+        'aggregation_amount': aggregation_amount_val
+    }
+    simulation_options = {'scale': ice_thickness}
+    junk_labels_options = {
+        'no_junk_filter': args.no_junk_filter,
+        'flip_x': args.flip_x,
+        'flip_y': args.flip_y,
+        'json_scale': args.json_scale,
+        'polygon_expansion_distance': args.polygon_expansion_distance
+    }
+    output_options = {
+        'save_as_mrc': args.mrc,
+        'save_as_png': args.png,
+        'save_as_jpeg': args.jpeg,
+        'jpeg_quality': args.jpeg_quality,
+        'imod_coordinate_file': args.imod_coordinate_file,
+        'coord_coordinate_file': args.coord_coordinate_file,
+        'output_path': f"{structure_name}/{fname}_{structure_name}{repeat_suffix}"
+    }
+
+    num_particles_projected, num_particles_with_saved_coordinates = add_images(input_options, particle_and_micrograph_generation_options,
+                                                                               simulation_options, junk_labels_options, output_options)
+
+    return num_particles_projected, num_particles_with_saved_coordinates
+
 def generate_micrographs(args, structure_name, structure_type, structure_index, total_structures):
     """
     Generate synthetic micrographs for a specified structure.
@@ -3363,75 +3460,37 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
     # Main Loop
     total_num_particles_projected = 0
     total_num_particles_with_saved_coordinates = 0
-    current_micrograph_number = 0
     micrograph_usage_count = {}  # Dictionary to keep track of repeating micrograph names if the image list was extended
     remaining_aggregation_amounts = list()
-    for line in selected_images:
-        current_micrograph_number += 1
-        # Parse the 'micrograph_name.mrc defocus' line
-        fname, defocus = line.strip().split()[:2]
-        fname = os.path.splitext(os.path.basename(fname))[0]
-        micrograph = readmrc(f"{args.image_directory}/{fname}.mrc")
-        # Track each micrograph's usage count for naming purposes
-        micrograph_usage_count[fname] = micrograph_usage_count.get(fname, 0) + 1
-        # Generate the repeat number suffix for the filename
-        repeat_suffix = f"_{micrograph_usage_count[fname]}" if micrograph_usage_count[fname] > 1 else ""
 
-        num_hyphens = '-' * (55 + len(f"{current_micrograph_number}{args.num_images}{structure_name}{structure_index}{total_structures}{fname}"))
-        print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
-        print_and_log(f"Generating synthetic micrograph ({current_micrograph_number}/{args.num_images}) using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
-        print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
-
-        # Determine ice and particle behavior parameters
-        ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts)
-
-        # Generate projections with the specified orientation mode
-        print_and_log(f"Projecting the structure volume ({structure_name}) {num_particles} times...")
-        particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles, args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
-
-        print_and_log(f"Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frames...")
-        mean, gaussian_variance = estimate_noise_parameters(micrograph)
-        if args.use_gpu:
-            noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.gpu_ids)
-        else:
-            noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b, args.dose_c, args.apix, args.cpus)
-
-        print_and_log(f"Applying CTF based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
-        noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor, args.apix, args.Cs, args.voltage, args.cpus)
-
-        print_and_log(f"Adding {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
-        # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
-        input_options = { 'large_image_path': f"{args.image_directory}/{fname}.mrc",
-            'large_image': micrograph,
-            'small_images': noisy_particles_CTF,
-            'pixelsize': args.apix,
-            'structure_name': structure_name,
-            'orientations': orientations }
-        particle_and_micrograph_generation_options = { 'scale_percent': args.scale_percent,
-            'dist_type': dist_type,
-            'non_random_dist_type': non_random_dist_type,
-            'border_distance': args.border,
-            'no_edge_particles': args.no_edge_particles,
-            'save_edge_coordinates': args.save_edge_coordinates,
-            'gaussian_variance': gaussian_variance,
-            'aggregation_amount': aggregation_amount_val }
-        simulation_options = { 'scale': ice_thickness }
-        junk_labels_options = { 'no_junk_filter': args.no_junk_filter,
-            'flip_x': args.flip_x,
-            'flip_y': args.flip_y,
-            'json_scale': args.json_scale,
-            'polygon_expansion_distance': args.polygon_expansion_distance }
-        output_options = { 'save_as_mrc': args.mrc,
-            'save_as_png': args.png,
-            'save_as_jpeg': args.jpeg,
-            'jpeg_quality': args.jpeg_quality,
-            'imod_coordinate_file': args.imod_coordinate_file,
-            'coord_coordinate_file': args.coord_coordinate_file,
-            'output_path': f"{structure_name}/{fname}_{structure_name}{repeat_suffix}" }
-
-        num_particles_projected, num_particles_with_saved_coordinates = add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options)
-        total_num_particles_projected += num_particles_projected
-        total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
+    # Check if parallelization is requested
+    if args.parallelize_micrographs > 1:
+        # Use ProcessPoolExecutor to parallelize the micrograph generation
+        with ProcessPoolExecutor(max_workers=args.parallelize_micrographs) as executor:
+            # Create a list to store the future tasks
+            futures = []
+            
+            # Iterate over the selected_images
+            for line in selected_images:
+                # Submit each micrograph generation task to the executor
+                future = executor.submit(process_single_micrograph, args, structure_name, structure, line, total_structures,
+                                         structure_index, micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts)
+                futures.append(future)
+            
+            # Iterate over the completed tasks
+            for future in futures:
+                # Aggregate the results from each task
+                num_particles_projected, num_particles_with_saved_coordinates = future.result()
+                total_num_particles_projected += num_particles_projected
+                total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
+    else:
+        # If no parallelization is requested, process each micrograph sequentially
+        for line in selected_images:
+            num_particles_projected, num_particles_with_saved_coordinates = process_single_micrograph(
+                args, structure_name, structure, line, total_structures, structure_index, micrograph_usage_count,
+                ice_scaling_fudge_factor, remaining_aggregation_amounts)
+            total_num_particles_projected += num_particles_projected
+            total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
 
     # Downsample micrographs and coordinate files
     if args.binning > 1:
