@@ -761,9 +761,6 @@ def download_pdb(pdb_id, suppress_errors=False):
     elif os.path.exists(symmetrized_pdb_path):
         os.rename(symmetrized_pdb_path, regular_pdb_path)
 
-    sample_name = get_pdb_sample_name(pdb_id)
-    print_and_log(f"[{pdb_id}] Sample name: {sample_name}\n")
-
     return True
 
 def download_random_pdb():
@@ -859,7 +856,7 @@ def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
 
         print_and_log(f"Download and decompression complete for EMD-{emdb_id}.")
         sample_name = get_emdb_sample_name(emdb_id)
-        print_and_log(f"[{emdb_id}] Sample name: {sample_name}\n")
+        print_and_log(f"[emd_{emdb_id}] Sample name: {sample_name}\n")
         return True
     except error.HTTPError as e:
         if not suppress_errors:
@@ -955,7 +952,6 @@ def process_structure_input(structure_input, max_emdb_size, std_devs_above_mean,
         structure_name = structure_input
         if download_pdb(structure_input):
             print_and_log(f"[{structure_name}] Sample name: {get_pdb_sample_name(structure_input)}")
-            print_and_log(f"[{structure_name}] Converting PDB to MRC...")
             return (structure_input, "pdb")
         else:
             print_and_log(f"Failed to download PDB: {structure_input}. Please check the ID and try again.", logging.WARNING)
@@ -1140,7 +1136,7 @@ def convert_pdb_to_mrc(pdb_name, apix, res):
     This function writes a .pdb file to the disk.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"[{pdb_name}]Converting PDB to MRC using EMAN2's e2pdb2mrc.py...")
+    print_and_log(f"[{pdb_name}] Converting PDB to MRC using EMAN2's e2pdb2mrc.py...")
     cmd = ["e2pdb2mrc.py", "--apix", str(apix), "--res", str(res), "--center", f"{pdb_name}.pdb", f"{pdb_name}.mrc"]
     output = subprocess.run(cmd, capture_output=True, text=True)
     print_and_log(output, logging.DEBUG)
@@ -1279,8 +1275,11 @@ def write_star_header(file_basename, apix, voltage, cs):
         star_file.write('_rlnAngleRot #5\n')
         star_file.write('_rlnAngleTilt #6\n')
         star_file.write('_rlnOpticsGroup #7\n')
+        star_file.write('_rlnDefocusU #8\n')
+        star_file.write('_rlnDefocusV #9\n')
+        star_file.write('_rlnDefocusAngle #10\n')
 
-def write_all_coordinates_to_star(structure_name, image_path, particle_locations, orientations):
+def write_all_coordinates_to_star(structure_name, image_path, particle_locations, orientations, defocus):
     """
     Write all particle locations and orientations to a STAR file.
 
@@ -1288,6 +1287,7 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
     :param str image_path: The path of the image to add.
     :param list_of_tuples particle_locations: A list of tuples; each tuple contains the x, y coordinates.
     :param list_of_tuples orientations: List of orientations as tuples of Euler angles (alpha, beta, gamma) in degrees.
+    :param float defocus: The defocus value to add to the STAR file.
 
     This function appends particle locations, orientations, and image_path to a .star file on the disk.
     """
@@ -1297,7 +1297,7 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
         for location, orientation in zip(particle_locations, orientations):
             x_shift, y_shift = location
             alpha, beta, gamma = orientation
-            star_file.write(f'{image_path} {x_shift} {y_shift} {alpha} {beta} {gamma} 1\n')
+            star_file.write(f'{image_path} {x_shift} {y_shift} {alpha} {beta} {gamma} 1 {defocus} {defocus} 0\n')
 
 def convert_point_to_model(point_file, output_file):
     """
@@ -1352,7 +1352,7 @@ def write_coord_file(coordinates, output_file):
         for x, y in coordinates:
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
 
-def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file):
+def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file, defocus):
     """
     Saves particle coordinates in specified formats (.star, .mod, .coord).
 
@@ -1363,6 +1363,7 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
     :param list output_path: Output base filename.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
+    :param float defocus: The defocus value to add to the STAR file.
 
     This function writes a .star file and optionally a .mod and .coord file.
     """
@@ -1370,12 +1371,11 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
     particle_locations = [loc for loc, ori in particle_locations_with_orientations]
     orientations = [ori for loc, ori in particle_locations_with_orientations]
     # Save .star file
-    write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations, orientations)
+    write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations, orientations, defocus)
 
     # Save IMOD .mod files
     if imod_coordinate_file:
         write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod")
-        #write_mod_file(removed_particles, os.path.splitext(point_file_path)[0] + "_removed.mod")  # Writes the particles that were removed
 
     # Save .coord files
     if coord_coordinate_file:
@@ -2873,7 +2873,7 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
 
     return collage
 
-def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context):
+def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context, defocus):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -2884,6 +2884,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :param dict junk_labels_options: Dictionary of options for junk labels.
     :param dict output_options: Dictionary of output options.
     :param str context: Context string for print statements (structure name and micrograph number).
+    :param float defocus: The defocus value to add to the STAR file.
     :return tuple: The blended large image, and the filtered particle locations.
     """
     print_and_log("", logging.DEBUG)
@@ -2989,11 +2990,11 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     # Combine filtered_particle_locations with orientations for easier passing
     filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations) if loc in filtered_particle_locations]
 
-    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file)
+    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file, defocus)
 
     return blended_image, filtered_particle_locations
 
-def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context):
+def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context, defocus):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
@@ -3004,6 +3005,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param dict junk_labels_options: Dictionary of options for junk labels.
     :param dict output_options: Dictionary of output options.
     :param str context: Context string for print statements (structure name and micrograph number).
+    :param float defocus: The defocus value to add to the STAR file.
     :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
 
     This function writes a .mrc/.png/.jpeg file to the disk.
@@ -3068,11 +3070,15 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     # Blend the images together
     if len(particle_locations) == num_small_images:
-        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context)
+        result_image, filtered_particle_locations = blend_images(
+            input_options, particle_and_micrograph_generation_options,
+            simulation_options, junk_labels_options, output_options, context, defocus)
     else:
         print_and_log(f"{context} Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...")
         input_options['small_images'] = small_images[:len(particle_locations), :, :]
-        result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context)
+        result_image, filtered_particle_locations = blend_images(
+            input_options, particle_and_micrograph_generation_options,
+            simulation_options, junk_labels_options, output_options, context, defocus)
 
     # Save the resulting micrograph in specified formats
     if save_as_mrc:
@@ -3316,7 +3322,7 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
 
     num_hyphens = '-' * (55 + len(f"{structure_index + 1}{total_structures}{structure_name}{fname}"))
     print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
-    print_and_log(f"Generating synthetic micrograph using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
+    print_and_log(f"Generating synthetic micrograph #{micrograph_number} using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
     print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
 
     # Determine ice and particle behavior parameters
@@ -3380,8 +3386,9 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         'output_path': f"{structure_name}/{fname}_{structure_name}{repeat_suffix}"
     }
 
-    num_particles_projected, num_particles_with_saved_coordinates = add_images(input_options, particle_and_micrograph_generation_options,
-                                                                               simulation_options, junk_labels_options, output_options, context)
+    num_particles_projected, num_particles_with_saved_coordinates = add_images(
+    input_options, particle_and_micrograph_generation_options,
+    simulation_options, junk_labels_options, output_options, context, defocus)
 
     return num_particles_projected, num_particles_with_saved_coordinates
 
@@ -3409,7 +3416,6 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
     # Convert PDB to MRC for PDBs and return the mass or estimate the mass of the MRC
     if structure_type == "pdb":
-        print_and_log(f"[{structure_name}] Converting PDB to MRC...")
         mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
         structure = reorient_mrc(f'{structure_name}.mrc')
         print_and_log(f"[{structure_name}] Reoriented MRC")
