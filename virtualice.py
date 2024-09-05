@@ -2351,7 +2351,7 @@ def generate_projection(angle, volume_data):
 
     return padded_projection
 
-def generate_projections(structure, num_projections, orientation_mode, preferred_angles, angle_variation, preferred_weight, num_cores, use_gpu):
+def generate_projections(structure, num_projections, orientation_mode, preferred_angles, angle_variation, preferred_weight, num_cores, use_gpu, gpu_ids):
     """
     Generate a list of projections for a given structure based on the specified orientation mode.
 
@@ -2363,6 +2363,7 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
     :param float preferred_weight: Weight of the preferred orientations in the range [0, 1], optional.
     :param int num_cores: Number of CPU cores to use for parallel processing, optional.
     :param bool use_gpu: Whether to use GPU for processing.
+    :param list gpu_ids: List of GPU IDs to use for processing.
     :return numpy.ndarray list_of_tuples: Array of generated projections, and list of orientations as tuples of Euler angles (alpha, beta, gamma) in degrees.
     """
     print_and_log("", logging.DEBUG)
@@ -2387,14 +2388,36 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
         # Trim the volume to the smallest possible cube containing non-zero voxels
         trimmed_volume = trim_volume(structure)
 
-        # Transfer trimmed volume to GPU
-        trimmed_volume_gpu = cp.asarray(trimmed_volume)
+        # Determine the maximum batch size based on available GPU memory for each GPU
+        slice_size = trimmed_volume.nbytes
+        batch_sizes = {}
 
-        original_shape = structure.shape[:2]
+        for gpu_id in gpu_ids:
+            utilization = get_gpu_utilization(gpu_id)
+            batch_size = get_max_batch_size(slice_size, utilization['free_mem'])
+            batch_sizes[gpu_id] = {'batch_size': batch_size, 'core_usage': utilization['core_usage']}
 
-        for angle in orientations:
-            projection = generate_projection_gpu(angle, trimmed_volume_gpu, original_shape)
-            projections.append(projection)
+        # Distribute and process projections across available GPUs
+        start = 0
+        while start < num_projections:
+            # Sort GPUs by core usage in ascending order
+            sorted_gpus = sorted(batch_sizes.items(), key=lambda x: x[1]['core_usage'])
+            for gpu_id, batch_info in sorted_gpus:
+                end = start + batch_info['batch_size']
+                projection_angles = orientations[start:end]
+                if not projection_angles:
+                    break
+
+                # Process the batch of projections on the GPU
+                with cp.cuda.Device(gpu_id):
+                    trimmed_volume_gpu = cp.asarray(trimmed_volume)
+                    for angle in projection_angles:
+                        projection = generate_projection_gpu(angle, trimmed_volume_gpu, structure.shape[:2])
+                        projections.append(projection)
+
+                start = end
+                if start >= num_projections:
+                    break
     else:
         with ProcessPoolExecutor(max_workers=num_cores) as executor:
             futures = [executor.submit(generate_projection, angle, structure) for angle in orientations]
@@ -3402,7 +3425,7 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     # Generate projections with the specified orientation mode
     print_and_log(f"{context} Projecting the structure volume ({structure_name}) {num_particles} times...")
     particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles,
-                                                   args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
+                                                   args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu, args.gpu_ids)
 
     print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frame{'s' if args.num_simulated_particle_frames != 1 else ''}...")
     mean, gaussian_variance = estimate_noise_parameters(micrograph)
