@@ -25,7 +25,7 @@ To use VirtualIce, download the virtualice.py file directly and place it in your
 
 ## Examples
 
-### Example 2:
+### Example 2 (PDB 1TIM, 53 kDa):
 ![Example 2](example_images/VirtualIce_example2.png)
 
 ## Usage
