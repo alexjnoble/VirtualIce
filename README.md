@@ -21,7 +21,7 @@ VirtualIce requires Python 3, EMAN2, IMOD, and several dependencies, which can b
 pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 ```
 
-To use VirtualIce, download the virtualice.py file directly and place it in your working directory or environment for use. Make it executable on Linux with this command: `chmod +x virtualice.py`.
+To use VirtualIce, clone the github directory, make virtualice.py executable (`chmod +x virtualice.py`), and ensure virtualice.py is in your environment for use.
 
 ## Examples
 
