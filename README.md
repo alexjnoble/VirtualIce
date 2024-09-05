@@ -23,6 +23,11 @@ pip install mrcfile numpy opencv-python pandas scipy SimpleITK
 
 To use VirtualIce, download the virtualice.py file directly and place it in your working directory or environment for use. Make it executable on Linux with this command: `chmod +x virtualice.py`.
 
+## Examples
+
+### Example 2:
+![Example 2](example_images/VirtualIce_example2.png)
+
 ## Usage
 
 The script can be run from the command line and takes a number of arguments.
