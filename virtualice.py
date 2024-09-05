@@ -2,10 +2,10 @@
 #
 # Author: Alex J. Noble, assisted by GPT, Claude, & Gemini, 2023-24 @SEMC, MIT License
 #
-# VirtualIce: Synthetic CryoEM Micrograph Generator
+# VirtualIce: Half-synthetic CryoEM Micrograph Generator
 #
-# This script generates synthetic cryoEM micrographs given protein structures and a list of
-# noise micrographs and their defoci. It is intended that the noise micrographs are cryoEM
+# This script generates half-synthetic cryoEM micrographs given protein structures and a list
+# of noise micrographs and their defoci. It is intended that the noise micrographs are cryoEM
 # images of buffer and that the junk & substrate are masked out using AnyLabeling.
 #
 # Dependencies: EMAN2 (namely e2pdb2mrc.py & e2proc3d.py)
