@@ -880,7 +880,7 @@ def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
 
         print_and_log(f"Download and decompression complete for EMD-{emdb_id}.")
         sample_name = get_emdb_sample_name(emdb_id)
-        print_and_log(f"[emd_{emdb_id}] Sample name: {sample_name}\n")
+        print_and_log(f"[emd_{emdb_id}] Sample name: {sample_name}")
         return True
     except error.HTTPError as e:
         if not suppress_errors:
@@ -1026,7 +1026,7 @@ def normalize_and_convert_mrc(input_file):
     try:
         # Normalize the volume
         output = subprocess.run(["e2proc3d.py", input_file, output_file, "--outtype=mrc", "--process=normalize.edgemean"], capture_output=True, text=True, check=True)
-        print_and_log(output.stdout)
+        print_and_log(output.stdout, logging.DEBUG)
 
         # Read the normalized volume, pad it, and save to the output file
         with mrcfile.open(output_file, mode='r+') as mrc:
@@ -1104,7 +1104,7 @@ def scale_mrc_file(input_mrc_path, pixelsize):
 
     try:
         output = subprocess.run(command, capture_output=True, text=True, check=True)
-        print_and_log(output)
+        print_and_log(output, logging.DEBUG)
     except subprocess.CalledProcessError as e:
         print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
 
@@ -2919,8 +2919,8 @@ def filter_out_overlapping_particles(particle_locations, half_small_image_width)
     # Build a KDTree for the particle locations
     tree = KDTree(particle_locations)
 
-    # Define the minimum distance required to avoid overlap (0.95 is a fudge factor)
-    min_distance = 0.95 * half_small_image_width
+    # Define the minimum distance required to avoid overlap (0.92 is a fudge factor)
+    min_distance = 0.92 * half_small_image_width
 
     # Find all pairs of particles that are closer than min_distance
     overlapping_particles = set()
