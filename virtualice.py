@@ -265,6 +265,9 @@ def parse_arguments(script_start_time):
     :param str script_start_time: Function start time, formatted as a string
     :returns argparse.Namespace: An object containing attributes for each command-line argument.
     """
+    # Determine the installation directory
+    installation_directory = os.path.dirname(os.path.abspath(__file__))
+
     parser = argparse.ArgumentParser(description="\033[1mVirtualIce:\033[0m A feature-rich synthetic cryoEM micrograph generator that projects pdbs|mrcs onto existing buffer cryoEM micrographs. Star files for particle coordinates are outputed by default, mod and coord files are optional. Particle coordinates located within per-micrograph polygons at junk/substrate locations are projected but not written to coordinate files.",
     epilog="""
 \033[1mExamples:\033[0m
@@ -288,8 +291,8 @@ def parse_arguments(script_start_time):
     # Input Options
     input_group = parser.add_argument_group('\033[1mInput Options\033[0m')
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
-    input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
-    input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
+    input_group.add_argument("-d", "--image_directory", type=str, default=os.path.join(installation_directory, "ice_images"), help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
+    input_group.add_argument("-i", "--image_list_file", type=str, default=os.path.join(installation_directory, "ice_images/good_images_with_defocus.txt"), help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-me", "--max_emdb_size", type=float, default=512, help="The maximum allowed file size in megabytes. Default is %(default)s")
 
     # Particle and Micrograph Generation Options
