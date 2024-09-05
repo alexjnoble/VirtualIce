@@ -276,7 +276,7 @@ def parse_arguments(script_start_time):
      Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
      Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
 
-  3. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,0,90] [90 180 0] -aa l h r -ne --use_cpu -V 2 -3
+  3. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,90,0] [90 180 *] -aa l h r -ne --use_cpu -V 2 -3
      Generates 5 random micrographs of PDB 1PMA (proteasome) with preferred orientation for 90% of particles. The preferred orientations are defined
      by random selections of [*,0,90] (free to rotate along the first Z axis, then do not rotate in Y, then rotate 90 degrees in Z) and
      [90 180 0] (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then do not rotate in Z). The aggregation amount is
@@ -288,8 +288,8 @@ def parse_arguments(script_start_time):
     # Input Options
     input_group = parser.add_argument_group('\033[1mInput Options\033[0m')
     input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
-    input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-d", "--image_directory", type=str, default="ice_images", help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
+    input_group.add_argument("-i", "--image_list_file", type=str, default="ice_images/good_images_with_defocus.txt", help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-me", "--max_emdb_size", type=float, default=512, help="The maximum allowed file size in megabytes. Default is %(default)s")
 
     # Particle and Micrograph Generation Options
@@ -298,11 +298,14 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-N", "--num_particles", type=check_num_particles, help="Number of particles to project onto the micrograph after rotation. Input an integer or 'max'. Default is a random number (weighted to favor numbers above 100 twice as much as below 100) up to a maximum of the number of particles that can fit into the micrograph without overlapping.")
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size (in Angstroms) of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
-    particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise in terms of standard deviations above the mean. The idea is to not have dust around the downloaded/imported 3D volume from the beginning. Default is %(default)s")
+    particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise from a downloaded/imported .mrc/.map file in terms of standard deviations above the mean. The idea is to not have dust around the 3D volume from the beginning. Default is %(default)s")
     particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise and optionally apply dose damaging. Default is %(default)s")
     particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non_random', 'm', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
     particle_micrograph_group.add_argument("-aa", "--aggregation_amount", nargs='+', default=['low', 'random'], help="Amount of particle aggregation. Aggregation amounts can be set per-run or per-micrograph. To set per-run, input 0-10, 'low', 'medium', 'high', or 'random'. To set multiple aggregation amounts that will be chose randomly per-micrograph, input combinations like 'low medium', 'low high', '2 5', or 'low 3 9 10'. To set random aggregation amounts within a range, append any word input combination with 'random', like 'random random' to give the full range, or 'low medium random' to give a range from 0 to 6.7. Abbreviations work too, like '3.2 l h r'. Default is %(default)s")
+    particle_micrograph_group.add_argument("-ao", "--allow_overlap", type=str, choices=['True', 'False', 'random'], default='random', help="Specify whether to allow overlapping particles. Options are 'True', 'False', or 'random'. Default is %(default)s")
+    particle_micrograph_group.add_argument("-nl", "--num_particle_layers", type=int, default=2, help="If overlapping particles is allowed, this is the number of overlapping particle layers allowed (soft condition, not strict. Used in determining the maximum number of particles that can be placed in a micrograph). Default is %(default)s")
+    particle_micrograph_group.add_argument("-so", "--save_overlapping_coords", action="store_true", help="Save overlapping particle coordinates to output files. Default is to not save overlapping particle")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("-ne", "--no_edge_particles", action="store_true", help="Prevent particles from being placed up to the edge of the micrograph. By default, particles can be placed up to the edge.")
     particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
@@ -316,7 +319,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-db", "--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-dc", "--dose_c", type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
-    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=100, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
+    simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=150, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
     simulation_group.add_argument("-ro", "--reorient_mrc", action="store_true", help="Reorient the MRC file (either provided as a .mrc file or requested from EMDB) so that the structure's principal axes align with the coordinate axes. Note: .pdb files are automatically reoriented, EMDB files are often too big to do so quickly. Default is %(default)s")
     simulation_group.add_argument("-om", "--orientation_mode", type=str, choices=['random', 'uniform', 'preferred'], default='random', help="Orientation mode for projections. Options are: random, uniform, preferred. Default is %(default)s")
@@ -359,9 +362,9 @@ def parse_arguments(script_start_time):
     misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
     misc_group.add_argument("--use_cpu", action='store_true', default=False, help="Use CPU for processing instead of GPU. Default: Use GPUs if available")
     misc_group.add_argument("-g", "--gpus", type=int, nargs='+', default=None, help="Specify which GPUs to use by their IDs for various processing steps: micrograph downsampling. Default: Use all available GPUs")
-    misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=1, help="Maximum number of parallel processes for each structure requested. Default is %(default)s")
-    misc_group.add_argument("-pm", "--parallelize_micrographs", type=int, default=1, help="Number of parallel processes for generating each micrograph. Default is 1 (no parallelization)")
-    misc_group.add_argument("-c", "--cpus", type=int, default=os.cpu_count(), help="Number of CPUs to use for various processing steps: Adding Poisson noise to and dose damaging particle frames, generating particle projections, micrograph downsampling, and particle cropping. Default is the number of CPU cores available: %(default)s")
+    misc_group.add_argument("-ps", "--parallelize_structures", type=int, default=None, help="Maximum number of parallel processes for each structure requested. Default is the number of structures requested or one-fourth the number of CPU cores available, whichever is smaller")
+    misc_group.add_argument("-pm", "--parallelize_micrographs", type=int, default=None, help="Number of parallel processes for generating each micrograph. Default is the number of micrographs requested or one-fourth the number of CPU cores available, whichever is smaller")
+    misc_group.add_argument("-c", "--cpus", type=int, default=None, help="Number of CPUs to use for various processing steps: Adding Poisson noise to and dose damaging particle frames, generating particle projections, micrograph downsampling, and particle cropping. Default is the number of CPU cores available, minus the number of structures parallelized across minus the number of micrographs parallelized across")
     misc_group.add_argument("-V", "--verbosity", type=int, default=1, help="Set verbosity level: 0 (quiet), 1 (some output), 2 (verbose), 3 (debug). For 0-2, a log file will be additionally written with 2. For 3, a log file will be additionally written with 3. Default is %(default)s")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Set verbosity to 0 (quiet). Overrides --verbosity if both are provided")
     misc_group.add_argument("-v", "--version", action="version", help="Show version number and exit", version=f"VirtualIce v{__version__}")
@@ -432,6 +435,19 @@ def parse_arguments(script_start_time):
         args.gpu_ids = None
         print_and_log("Using only CPUs for processing.", logging.DEBUG)
 
+    # Automatically adjust parallelization settings based on available CPU cores
+    available_cpus = os.cpu_count()
+    if args.parallelize_structures == None:
+        args.parallelize_structures = min(max(1, available_cpus // 4), len(args.structures))
+    else:
+        args.parallelize_structures = min(args.parallelize_structures, len(args.structures))
+    if args.parallelize_micrographs == None:
+        args.parallelize_micrographs = min(max(1, available_cpus // 4), args.num_images)
+    else:
+        args.parallelize_micrographs = min(args.parallelize_micrographs, args.num_images)
+    if args.cpus == None:
+        args.cpus = max(1, available_cpus - args.parallelize_structures - args.parallelize_micrographs)
+
     # Remove duplicate --structures
     args.structures = remove_duplicates_structures(args.structures)
 
@@ -477,6 +493,14 @@ def parse_arguments(script_start_time):
             parser.error("--dose_a, --dose_b, and --dose_c must be provided for --dose_damage=Custom.")
     if args.dose_damage == 'None':
         args.dose_a = args.dose_b = args.dose_c = 0
+        args.num_simulated_particle_frames = 1  # No dose damage is equivalent to setting num_frames = 1 because it's just accumulating Poisson noise
+
+    # Adjust allow_overlap to be random if not user-specified
+    if args.allow_overlap == 'random':
+        args.allow_overlap_random = True
+    else:
+        args.allow_overlap_random = False
+        args.allow_overlap = (args.allow_overlap == 'True')
 
     # Print all arguments for the user's information
     formatted_output = ""
@@ -1312,7 +1336,7 @@ def convert_point_to_model(point_file, output_file):
     try:
         # Run point2model command and give particles locations a circle of radius 3
         output = subprocess.run(["point2model", "-circle", "3", "-scat", point_file, output_file], capture_output=True, text=True, check=True)
-        print_and_log(output)
+        print_and_log(output, logging.DEBUG)
     except subprocess.CalledProcessError:
         print_and_log("Error while converting coordinates using point2model.", logging.WARNING)
     except FileNotFoundError:
@@ -1718,7 +1742,11 @@ def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
         # Determine the file format
         filename = os.path.basename(image_path)
         name, ext = os.path.splitext(filename)
-        image = readmrc(image_path)
+        if ext == '.mrc':
+            image = readmrc(image_path)
+        elif ext in ['.png', '.jpeg']:
+            image = cv2.imread(image_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Apply downsampling
         if use_gpu:
@@ -1735,6 +1763,10 @@ def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
         if ext == '.mrc':
             writemrc(binned_image_path, downsampled_image.astype(np.float32), downsample_factor * pixelsize)
         else:  # ext == .png/.jpeg
+            # Normalize image to [0, 255] and convert to uint8
+            downsampled_image -= downsampled_image.min()
+            downsampled_image = downsampled_image / downsampled_image.max() * 255.0
+            downsampled_image = downsampled_image.astype(np.uint8)
             cv2.imwrite(binned_image_path, downsampled_image)
 
     except Exception as e:
@@ -1756,7 +1788,7 @@ def parallel_downsample_micrographs(image_directory, downsample_factor, pixelsiz
     image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
     if use_gpu:
-        image_size = readmrc(image_paths[0]).nbytes
+        image_size = readmrc(next(file for file in image_paths if file.endswith('.mrc'))).nbytes
         batch_sizes = {}
         # Determine batch size for each GPU based on its available memory and utilization
         for gpu_id in gpu_ids:
@@ -1912,7 +1944,7 @@ def read_star_particles(star_file_path):
         for i, line in enumerate(file):
             if 'data_particles' in line:
                 # Found the data_particles section, now look for the actual data start
-                data_start_line = i + 10  # Adjust if more lines are added to the star file
+                data_start_line = i + 14  # Adjust if more lines are added to the star file
                 break
 
     if data_start_line is None:
@@ -1922,23 +1954,25 @@ def read_star_particles(star_file_path):
     # Correct the `skiprows` approach to accurately target the start of data rows
     # Use `comment='#'` to ignore lines starting with '#'
     df = pd.read_csv(star_file_path, sep='\s+', skiprows=lambda x: x < data_start_line, header=None,
-                     names=['micrograph_name', 'coord_x', 'coord_y', 'angle_psi', 'angle_rot', 'angle_tilt', 'optics_group'], comment='#')
+                     names=['micrograph_name', 'coord_x', 'coord_y', 'angle_psi', 'angle_rot', 'angle_tilt', 'optics_group', 'defocus_u', 'defocus_v', 'defocus_angle'], comment='#')
 
     return df
 
-def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_percent):
+def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_percent, allow_overlap, num_particle_layers, num_particles):
     """
-    Trim a volume and return a random number of particles within a micrograph based on the maximum
-    number of projections of this volume that can fit in the micrograph without overlapping.
+    Trim a volume and return a number of particles within a micrograph based on the maximum
+    number of projections of this volume that can fit in the micrograph.
 
     :param numpy_array mrc_array: The input volume in MRC format.
-    :param str input_micrograph: The file path of the input micrograph in MRC format.
+    :param numpy_array input_micrograph: The input micrograph image (2D numpy array).
     :param float scale_percent: The percentage to scale the volume for trimming.
-    :return numpy_array int int: 3D numpy array of the structure for which to generate projections,
-                                 A random number of particles up to the maximum of how many will fit
-                                 in the micrograph, and this maximum value.
+    :param bool allow_overlap: Flag to allow overlapping particles.
+    :param int num_particle_layers: Number of layers of overlapping particles to project (only used if allow_overlap is True).
+    :param int/str num_particles: Number of particles to project or 'max' for maximum particles.
+    :return numpy_array, int, int: Trimmed MRC 3D array, number of particles to project, and the maximum number of particles.
     """
     print_and_log("", logging.DEBUG)
+
     # Find the non-zero entries and their indices
     non_zero_indices = np.argwhere(mrc_array)
 
@@ -1949,8 +1983,8 @@ def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_perce
     # Compute the size of the largest possible equilateral cube
     min_cube_size = np.max(max_indices - min_indices)
 
-    # Increase the cube size by #%
-    cube_size = int(np.ceil(min_cube_size * (100 + scale_percent)/100))
+    # Increase the cube size by the scale_percent
+    cube_size = int(np.ceil(min_cube_size * (100 + scale_percent) / 100))
 
     # Find the next largest number that is divisible by at least 3 of the 5 smallest prime numbers
     primes = [2, 3, 5]
@@ -1968,12 +2002,24 @@ def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_perce
     trimmed_mrc_array = mrc_array[min_indices[0]:max_indices[0], min_indices[1]:max_indices[1], min_indices[2]:max_indices[2]]
 
     # Set the maximum number of particle projections that can fit in the image
-    max_num_particles = int(2*input_micrograph.shape[0]*input_micrograph.shape[1]/(trimmed_mrc_array.shape[0]*trimmed_mrc_array.shape[1]))
+    max_num_particles_without_overlap = int(2 * input_micrograph.shape[0] * input_micrograph.shape[1] / (trimmed_mrc_array.shape[0] * trimmed_mrc_array.shape[1]))
 
-    # Choose a random number of particles between 2 and max, with low particle numbers (<100) downweighted
-    rand_num_particles = non_uniform_random_number(2, max_num_particles, 100, 0.5)
+    # Determine max_num_particles based on whether overlap is allowed
+    if allow_overlap:
+        max_num_particles = num_particle_layers * max_num_particles_without_overlap
+    else:
+        max_num_particles = max_num_particles_without_overlap
 
-    return trimmed_mrc_array, rand_num_particles, max_num_particles
+    # Determine the number of particles to project based on user input or randomly
+    if str(num_particles).lower() == 'max':
+        num_particles_to_project = max_num_particles
+    elif isinstance(num_particles, int):
+        num_particles_to_project = min(num_particles, max_num_particles)
+    else:
+        # Choose a random number of particles between 2 and max_num_particles, with low particle numbers (<100) downweighted
+        num_particles_to_project = non_uniform_random_number(2, max_num_particles, 100, 0.5)
+
+    return trimmed_mrc_array, num_particles_to_project, max_num_particles
 
 def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context):
     """
@@ -1995,7 +2041,10 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
     # 2. If the user does not provide a value, use `rand_num_particles`.
     # 3. If the user's provided value exceeds `max_num_particles`, use `max_num_particles` instead.
     # 4. If the user specifies 'max', use max_num_particles, otherwise apply the existing conditions
-    structure, rand_num_particles, max_num_particles = trim_vol_determine_particle_numbers(structure, micrograph, args.scale_percent)
+
+    structure, rand_num_particles, max_num_particles = trim_vol_determine_particle_numbers(
+        structure, micrograph, args.scale_percent, args.allow_overlap, args.num_particle_layers, args.num_particles)
+    
     num_particles = (max_num_particles if str(args.num_particles).lower() == 'max' else
              args.num_particles if args.num_particles and isinstance(args.num_particles, int) and args.num_particles <= max_num_particles else
              rand_num_particles if not args.num_particles else
@@ -2353,7 +2402,9 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
 
     return np.array(projections), orientations
 
-def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type, aggregation_amount):
+def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, 
+                                border_distance, no_edge_particles, dist_type, non_random_dist_type, 
+                                aggregation_amount, allow_overlap):
     """
     Generate random/non-random locations for particles within an image.
 
@@ -2366,6 +2417,8 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
     :param str dist_type: Particle location generation distribution type - 'random' or 'non_random'.
     :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non_random';
                                      ie. 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
+    :param float aggregation_amount: Amount of particle aggregation.
+    :param bool allow_overlap: Flag to allow overlapping particles.
     :return list_of_tuples: A list of particle locations as tuples (x, y).
     """
     print_and_log("", logging.DEBUG)
@@ -2377,20 +2430,28 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
 
     particle_locations = []
 
-    def is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+    def is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
         """
         Check if a new particle location is far enough from existing particle locations.
 
         :param tuple new_particle_location: The new particle location as a tuple (x, y).
-        :param tuple particle_locations: The existing particle locations.
+        :param list_of_tuples particle_locations: The existing particle locations.
         :param int half_small_image_width: Half the width of a small image.
-        :return bool: True if the new particle location is far enough, False otherwise.
+        :param bool allow_overlap: Flag to allow overlapping particles.
+        :return bool: True if the new particle location is far enough or if overlapping is allowed, False otherwise.
         """
+        if allow_overlap:
+            # Bypass the distance check if overlapping is allowed
+            return True
+
+        # Check distance to all existing particles
         for particle_location in particle_locations:
-            distance = np.sqrt((new_particle_location[0] - particle_location[0])**2 + (new_particle_location[1] - particle_location[1])**2)
+            distance = np.sqrt((new_particle_location[0] - particle_location[0])**2 + 
+                               (new_particle_location[1] - particle_location[1])**2)
             if distance < half_small_image_width:
-                return False
-        return True
+                return False  # Indicating overlap
+
+        return True  # No overlap found
 
     max_attempts = 1000  # Maximum number of attempts to find an unoccupied point in the distribution
 
@@ -2401,17 +2462,25 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
             x = np.random.randint(border_distance, width - border_distance)
             y = np.random.randint(border_distance, height - border_distance)
             new_particle_location = (x, y)
-            if is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+            
+            if allow_overlap:
+                # Directly add the new particle location if overlapping is allowed
                 particle_locations.append(new_particle_location)
-                attempts = 0  # Reset attempts counter after successful addition
             else:
-                attempts += 1  # Increment attempts counter if addition is unsuccessful
+                # Check if the new particle location is far enough from existing ones
+                if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
+                    particle_locations.append(new_particle_location)
+                    attempts = 0  # Reset attempts counter after successful addition
+                else:
+                    attempts += 1  # Increment attempts counter if addition is unsuccessful
 
     elif dist_type == 'non_random':
+        # Handle non-random distributions (circular, inverse_circular, gaussian, micrograph)
         if non_random_dist_type == 'circular':
             # Make a circular cluster of particles
             cluster_center = (width // 2, height // 2)
             attempts = 0  # Counter for attempts to find a valid position
+
             # Keep generating and appending particle locations until we have enough.
             while len(particle_locations) < num_small_images and attempts < max_attempts:
                 # Generate random angle and radius for polar coordinates.
@@ -2421,43 +2490,43 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                 x = int(cluster_center[0] + radius * np.cos(angle))
                 y = int(cluster_center[1] + radius * np.sin(angle))
                 new_particle_location = (x, y)
-                if is_far_enough(new_particle_location, particle_locations, half_small_image_width) and border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance:
+                
+                if allow_overlap:
                     particle_locations.append(new_particle_location)
-                    attempts = 0  # Reset attempts counter after successful addition
                 else:
-                    attempts += 1  # Increment attempts counter if addition is unsuccessful
+                    if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
+                        particle_locations.append(new_particle_location)
+                        attempts = 0
+                    else:
+                        attempts += 1
 
         elif non_random_dist_type == 'inverse_circular':
             # Parameters for the exclusion zone
             # Randomly determine the center within the image, away from the edges
             exclusion_center_x = np.random.randint(border_distance + half_small_image_width, width - border_distance - half_small_image_width)
             exclusion_center_y = np.random.randint(border_distance + half_small_image_width, height - border_distance - half_small_image_width)
-            exclusion_center = (exclusion_center_x, exclusion_center_y)
+            exclusion_radius = np.random.randint(half_small_image_width, min(width // 2, height // 2))
 
-            # Determine the maximum possible radius for the exclusion zone based on the image size and center position
-            max_radius = min(width // 2, height // 2)
-
-            # Randomly select a radius for the exclusion zone
-            exclusion_radius = np.random.randint(half_small_image_width, max_radius)
-
-            # Generate particle locations avoiding the central circle
-            attempts = 0  # Counter for attempts to find a valid position outside the exclusion zone
+            attempts = 0
             while len(particle_locations) < num_small_images and attempts < max_attempts:
                 x = np.random.randint(border_distance, width - border_distance)
                 y = np.random.randint(border_distance, height - border_distance)
                 new_particle_location = (x, y)
                 # Check if the location is outside the exclusion zone
                 if np.sqrt((x - exclusion_center_x) ** 2 + (y - exclusion_center_y) ** 2) > exclusion_radius:
-                    if is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+                    if allow_overlap:
                         particle_locations.append(new_particle_location)
-                        attempts = 0  # Reset attempts counter after successful addition
                     else:
-                        attempts += 1  # Increment attempts counter if addition is unsuccessful
+                        if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
+                            particle_locations.append(new_particle_location)
+                            attempts = 0
+                        else:
+                            attempts += 1
                 else:
-                    attempts += 1  # Increment attempts counter if location is inside the exclusion zone
+                    attempts += 1
 
         elif non_random_dist_type == 'gaussian':
-            num_gaussians = np.random.randint(1, 6)  # Random number of Gaussian distributions between 1 and 5
+            num_gaussians = np.random.randint(1, 6)
             gaussians = []
             # For each Gaussian distribution:
             for _ in range(num_gaussians):
@@ -2470,21 +2539,22 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                                                                     height - center[1] - border_distance))
                 gaussians.append((center, stddev))
 
-            attempts = 0  # Reset attempts counter
-            # Keep generating and appending particle locations until we have enough.
+            attempts = 0
             while len(particle_locations) < num_small_images and attempts < max_attempts:
-                # Randomly select one of the Gaussian distributions.
                 chosen_gaussian = np.random.choice(num_gaussians)
                 center, stddev = gaussians[chosen_gaussian]
-                # Generate random x and y coordinates from the chosen Gaussian.
                 x = int(np.random.normal(center[0], stddev))
                 y = int(np.random.normal(center[1], stddev))
                 new_particle_location = (x, y)
-                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+                
+                if allow_overlap:
                     particle_locations.append(new_particle_location)
-                    attempts = 0  # Reset attempts counter after successful addition
                 else:
-                    attempts += 1  # Increment attempts counter if addition is unsuccessful
+                    if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
+                        particle_locations.append(new_particle_location)
+                        attempts = 0
+                    else:
+                        attempts += 1
 
         elif non_random_dist_type == 'micrograph':
             # Apply a Gaussian filter to the micrograph to obtain large-scale features
@@ -2534,7 +2604,7 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
                     new_particle_location = (x, y)
 
                 # Check if the new location is within borders and far enough from other particles
-                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width):
+                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
                     particle_locations.append(new_particle_location)
                     attempts = 0  # Reset attempts counter after successful addition
                 else:
@@ -2810,6 +2880,38 @@ def apply_ctfs_with_eman2(particles, defocuses, ampcont, bfactor, apix, cs, volt
     particles_CTF = np.array(results, dtype=np.float32)
     return particles_CTF
 
+def filter_out_overlapping_particles(particle_locations, half_small_image_width):
+    """
+    Filter out overlapping particles based on the center-to-center distance.
+
+    :param list_of_tuples particle_locations: List of (x, y) coordinates of particle locations.
+    :param int half_small_image_width: Half the width of a small image.
+    :return list_of_tuples: List of (x, y) coordinates of non-overlapping particle locations.
+    """
+    print_and_log("", logging.DEBUG)
+
+    # Use scipy.spatial.KDTree for efficient nearest-neighbor search
+    from scipy.spatial import KDTree
+
+    # Build a KDTree for the particle locations
+    tree = KDTree(particle_locations)
+
+    # Define the minimum distance required to avoid overlap (0.95 is a fudge factor)
+    min_distance = 0.95 * half_small_image_width
+
+    # Find all pairs of particles that are closer than min_distance
+    overlapping_particles = set()
+    for i, location in enumerate(particle_locations):
+        indices = tree.query_ball_point(location, min_distance)
+        # If more than one particle is found within the min_distance, mark them as overlapping
+        if len(indices) > 1:
+            overlapping_particles.update(indices)
+
+    # Filter out the overlapping particles
+    filtered_locations = [loc for i, loc in enumerate(particle_locations) if i not in overlapping_particles]
+
+    return filtered_locations
+
 def create_collage(large_image, small_images, particle_locations, gaussian_variance):
     """
     Create a collage of small images on a blank canvas of the same size as the large image.
@@ -2873,7 +2975,8 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
 
     return collage
 
-def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context, defocus):
+def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, 
+                 junk_labels_options, output_options, context, defocus):
     """
     Blend small images (particles) into a large image (micrograph).
     Also makes coordinate files.
@@ -2890,27 +2993,11 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     print_and_log("", logging.DEBUG)
     # Extract input options
     large_image = input_options['large_image']
-    large_image_path = input_options['large_image_path']
     small_images = input_options['small_images']
-    structure_name = input_options['structure_name']
     particle_locations = input_options['particle_locations']
-    image_size = input_options['image_size']
-    num_small_images = input_options['num_small_images']
-    half_small_image_width = input_options['half_small_image_width']
-    prob_map = input_options['prob_map']
     orientations = input_options['orientations']
-
-    # Extract particle and micrograph generation options
-    scale_percent = particle_and_micrograph_generation_options['scale_percent']
-    dist_type = particle_and_micrograph_generation_options['dist_type']
-    non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
-    border_distance = particle_and_micrograph_generation_options['border_distance']
-    no_edge_particles = particle_and_micrograph_generation_options['no_edge_particles']
-    save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
-    gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
-
-    # Extract simulation options
-    scale = simulation_options['scale']
+    structure_name = input_options['structure_name']
+    output_path = output_options['output_path']
 
     # Extract junk labels options
     no_junk_filter = junk_labels_options['no_junk_filter']
@@ -2919,20 +3006,11 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     json_scale = junk_labels_options['json_scale']
     polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
 
-    # Extract output options
-    save_as_mrc = output_options['save_as_mrc']
-    save_as_png = output_options['save_as_png']
-    save_as_jpeg = output_options['save_as_jpeg']
-    jpeg_quality = output_options['jpeg_quality']
-    imod_coordinate_file = output_options['imod_coordinate_file']
-    coord_coordinate_file = output_options['coord_coordinate_file']
-    output_path = output_options['output_path']
-
-    json_file_path = os.path.splitext(large_image_path)[0] + ".json"
+    # Junk Filtering
+    json_file_path = os.path.splitext(input_options['large_image_path'])[0] + ".json"
     if not no_junk_filter:
         if os.path.exists(json_file_path):
             polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
-
             # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
             filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
@@ -2941,64 +3019,79 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
             print_and_log(f"{context} No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
             filtered_particle_locations = particle_locations
     else:
-        print_and_log(f"{context} Skipping junk filtering (ie. not using JSON file)")
+        print_and_log(f"{context} Skipping junk filtering (i.e., not using JSON file)")
         filtered_particle_locations = particle_locations
 
-    # Remove edge particles from coordinate files if requested
-    if not save_edge_coordinates:
+    # Edge Particle Filtering
+    if not particle_and_micrograph_generation_options['save_edge_coordinates']:
         remaining_particle_locations = filtered_particle_locations[:]
-
-        # Loop through each particle location to check its proximity to the edge
         for x, y in filtered_particle_locations:
-            # Calculate the effective borders for this particle
-            reduced_sidelength = int(np.ceil(half_small_image_width * 100/(100 + scale_percent)))  # Unscale the sidelength, which was previously scaled up to capture more CTF
+            reduced_sidelength = int(np.ceil(input_options['half_small_image_width'] * 100 / (100 + particle_and_micrograph_generation_options['scale_percent'])))
             left_edge = x - reduced_sidelength
             right_edge = x + reduced_sidelength
             top_edge = y - reduced_sidelength
             bottom_edge = y + reduced_sidelength
 
             # Determine if the particle is too close to any edge of the large image
-            if (left_edge < border_distance or right_edge > large_image.shape[1] - border_distance or
-                top_edge < border_distance or bottom_edge > large_image.shape[0] - border_distance):
-                # Remove this particle's location if we're not saving edge coordinates
-                if not save_edge_coordinates:
-                    remaining_particle_locations.remove((x, y))
+            if (left_edge < particle_and_micrograph_generation_options['border_distance'] or 
+                right_edge > large_image.shape[1] - particle_and_micrograph_generation_options['border_distance'] or
+                top_edge < particle_and_micrograph_generation_options['border_distance'] or 
+                bottom_edge > large_image.shape[0] - particle_and_micrograph_generation_options['border_distance']):
+                remaining_particle_locations.remove((x, y))
 
         num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
         if num_particles_removed > 0:
             print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) due to being too close to the edge.")
         else:
             print_and_log(f"{context} 0 particles removed from coordinate file(s) due to being too close to the edge.")
-
-        # Use the remaining locations for further processing
         filtered_particle_locations = remaining_particle_locations
 
+    # Overlapping Particle Filtering - for Coordinate Files only
+    if not particle_and_micrograph_generation_options['save_overlapping_coords']:
+        filtered_particle_locations = filter_out_overlapping_particles(filtered_particle_locations, input_options['half_small_image_width'])
+        num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
+        if num_particles_removed > 0:
+            print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s).")
+        else:
+            print_and_log(f"{context} 0 particles removed from coordinate file(s) due to overlapping.")
+
+    # Ensure small_images and particle_locations are the same length
+    if len(small_images) > len(particle_locations):
+        small_images = small_images[:len(particle_locations)]
+
     # Normalize the input micrograph to itself
-    large_image[:, :] = (large_image[:, :] - large_image[:, :].mean())/large_image[:, :].std()
+    large_image[:, :] = (large_image[:, :] - large_image[:, :].mean()) / large_image[:, :].std()
 
-    collage = create_collage(large_image, small_images, particle_locations, gaussian_variance)
-    if prob_map is not None:
-        collage = collage * scale * prob_map  # Scale by local ice thickness
+    # Create the collage of particles on the micrograph
+    collage = create_collage(large_image, small_images, particle_locations, 
+                             particle_and_micrograph_generation_options['gaussian_variance'])
+
+    # If a probability map is provided, adjust the collage based on local ice thickness
+    if 'prob_map' in input_options and input_options['prob_map'] is not None:
+        collage *= simulation_options['scale'] * input_options['prob_map']
     else:
-        collage *= scale  # Scale by uniform ice thickness
+        collage *= simulation_options['scale']
 
-    blended_image = large_image + collage  # Blend the collage with the large image
+    # Blend the collage with the large image
+    blended_image = large_image + collage
 
     # Normalize the resulting micrograph to itself
     blended_image = (blended_image - blended_image.mean()) / blended_image.std()
 
     # Combine filtered_particle_locations with orientations for easier passing
-    filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations) if loc in filtered_particle_locations]
+    filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations)]
 
-    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file, defocus)
+    # Save particle coordinates to coordinate files
+    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, 
+                              output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus)
 
-    return blended_image, filtered_particle_locations
+    return blended_image, filtered_particle_locations_with_orientations
 
-def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, junk_labels_options, output_options, context, defocus):
+def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, 
+               junk_labels_options, output_options, context, defocus):
     """
     Add small images or particles to a large image and save the resulting micrograph.
 
-    The input options include these parameters:
     :param dict input_options: Dictionary of input options, including large_image, small_images, etc.
     :param dict particle_and_micrograph_generation_options: Dictionary of particle and micrograph generation options.
     :param dict simulation_options: Dictionary of simulation options.
@@ -3006,11 +3099,12 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     :param dict output_options: Dictionary of output options.
     :param str context: Context string for print statements (structure name and micrograph number).
     :param float defocus: The defocus value to add to the STAR file.
-    :return int int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
+    :return int, int: The number of particles added to the micrograph, and the number of particles saved to coordinate file(s).
 
     This function writes a .mrc/.png/.jpeg file to the disk.
     """
     print_and_log("", logging.DEBUG)
+
     # Extract input options
     large_image_path = input_options['large_image_path']
     large_image = input_options['large_image']
@@ -3018,6 +3112,10 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     pixelsize = input_options['pixelsize']
     structure_name = input_options['structure_name']
     orientations = input_options['orientations']
+    output_path = output_options['output_path']
+
+    # Calculate half the width of a small image
+    half_small_image_width = int(small_images.shape[1] / 2)
 
     # Extract particle and micrograph generation options
     scale_percent = particle_and_micrograph_generation_options['scale_percent']
@@ -3028,74 +3126,41 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
     gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
     aggregation_amount = particle_and_micrograph_generation_options['aggregation_amount']
+    allow_overlap = particle_and_micrograph_generation_options['allow_overlap']
 
-    # Extract simulation options
-    scale = simulation_options['scale']
+    # Generate particle locations using generate_particle_locations function
+    particle_locations, prob_map = generate_particle_locations(large_image, np.flip(large_image.shape), 
+                                                               len(small_images), half_small_image_width, 
+                                                               border_distance, no_edge_particles, dist_type, 
+                                                               non_random_dist_type, aggregation_amount, allow_overlap)
 
-    # Extract junk labels options
-    no_junk_filter = junk_labels_options['no_junk_filter']
-    flip_x = junk_labels_options['flip_x']
-    flip_y = junk_labels_options['flip_y']
-    json_scale = junk_labels_options['json_scale']
-    polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
+    # Add changed variables to input_options
+    input_options['prob_map'] = prob_map
+    input_options['particle_locations'] = particle_locations
+    input_options['half_small_image_width'] = half_small_image_width
 
-    # Extract output options
-    save_as_mrc = output_options['save_as_mrc']
-    save_as_png = output_options['save_as_png']
-    save_as_jpeg = output_options['save_as_jpeg']
-    jpeg_quality = output_options['jpeg_quality']
-    imod_coordinate_file = output_options['imod_coordinate_file']
-    coord_coordinate_file = output_options['coord_coordinate_file']
-    output_path = output_options['output_path']
-
-    # Get some micrograph and particle information
-    image_size = np.flip(large_image.shape)
-    num_small_images = len(small_images)
-    half_small_image_width = int(small_images.shape[1]/2)
-
-    # Generates unfiltered particle locations, which may be filtered of junk and/or edge particles in blend_images
-    particle_locations, prob_map = generate_particle_locations(large_image, image_size, num_small_images, half_small_image_width, border_distance, no_edge_particles, dist_type, non_random_dist_type, aggregation_amount)
-
-    # Modify dictionary parameters to pass to make it easy to add/change parameters with continued development
-    input_options = { 'large_image': large_image,
-        'large_image_path': large_image_path,
-        'small_images': small_images,
-        'structure_name': structure_name,
-        'particle_locations': particle_locations,
-        'image_size': image_size,
-        'num_small_images': num_small_images,
-        'half_small_image_width': half_small_image_width,
-        'prob_map': prob_map,
-        'orientations': orientations }
-
-    # Blend the images together
-    if len(particle_locations) == num_small_images:
-        result_image, filtered_particle_locations = blend_images(
-            input_options, particle_and_micrograph_generation_options,
-            simulation_options, junk_labels_options, output_options, context, defocus)
-    else:
+    # Proceed with blending images
+    if len(particle_locations) != len(small_images):
         print_and_log(f"{context} Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...")
-        input_options['small_images'] = small_images[:len(particle_locations), :, :]
-        result_image, filtered_particle_locations = blend_images(
-            input_options, particle_and_micrograph_generation_options,
-            simulation_options, junk_labels_options, output_options, context, defocus)
+    result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options,
+                                                             simulation_options, junk_labels_options, output_options, context, defocus)
 
     # Save the resulting micrograph in specified formats
-    if save_as_mrc:
+    if output_options['save_as_mrc']:
         print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.mrc...")
         writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
-    if save_as_png:
+    if output_options['save_as_png']:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
         print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.png...")
         cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
-    if save_as_jpeg:
+    if output_options['save_as_jpeg']:
         # Needs to be scaled from 0 to 255 and flipped
         result_image -= result_image.min()
         result_image = result_image / result_image.max() * 255.0
         print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.jpeg...")
-        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, output_options['jpeg_quality']])
 
     return len(particle_locations), len(filtered_particle_locations)
 
@@ -3325,6 +3390,11 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     print_and_log(f"Generating synthetic micrograph #{micrograph_number} using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
     print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
 
+    # Determine if overlap is allowed for this micrograph
+    if args.allow_overlap_random:
+        args.allow_overlap = bool(random.getrandbits(1))
+    print_and_log(f"{context} {'Allowing' if args.allow_overlap else 'Not allowing'} overlapping particles for this micrograph.")
+
     # Determine ice and particle behavior parameters
     ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
         args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context)
@@ -3334,7 +3404,7 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
     particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles,
                                                    args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu)
 
-    print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frames...")
+    print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frame{'s' if args.num_simulated_particle_frames != 1 else ''}...")
     mean, gaussian_variance = estimate_noise_parameters(micrograph)
     if args.use_gpu:
         noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
@@ -3366,7 +3436,9 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         'no_edge_particles': args.no_edge_particles,
         'save_edge_coordinates': args.save_edge_coordinates,
         'gaussian_variance': gaussian_variance,
-        'aggregation_amount': aggregation_amount_val
+        'aggregation_amount': aggregation_amount_val,
+        'allow_overlap': args.allow_overlap,
+        'save_overlapping_coords': args.save_overlapping_coords
     }
     simulation_options = {'scale': ice_thickness}
     junk_labels_options = {
@@ -3476,7 +3548,7 @@ def generate_micrographs(args, structure_name, structure_type, structure_index, 
 
     # Downsample micrographs and coordinate files
     if args.binning > 1:
-        print_and_log(f"[{structure_name}] Binning/Downsampling micrographs by {downsample_factor} by Fourier cropping...\n")
+        print_and_log(f"[{structure_name}] Binning/Downsampling micrographs by {args.binning} by Fourier cropping...")
         parallel_downsample_micrographs(f"{structure_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
         downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
     else:
@@ -3595,14 +3667,19 @@ def find_micrograph_files(structure_dirs):
     micrograph_files = sorted(micrograph_files, key=lambda f: (f.rsplit('.', 1)[0], extension_order.get('.' + f.rsplit('.', 1)[1], 3)))
     return micrograph_files
 
-def view_in_3dmod_async(micrograph_files):
+def view_in_3dmod_async(micrograph_files, imod_coordinate_file):
     """
     Open micrograph files in 3dmod asynchronously.
 
     :param list micrograph_files: List of micrograph file paths to open in 3dmod.
+    :param bool imod_coordinate_file: Whether IMOD .mod coordinate files were saved.
     """
     print_and_log("", logging.DEBUG)
-    subprocess.run(["3dmod"] + micrograph_files)
+    if len(micrograph_files) == 1 and imod_coordinate_file:  # Open the micrograph and coordinates if there's only 1 micrograph
+        mod_file = [micrograph_files[0].rsplit('.', 1)[0] + '.mod']
+        subprocess.run(["3dmod"] + micrograph_files + mod_file)
+    else:
+        subprocess.run(["3dmod"] + micrograph_files)
     print_and_log("Opening micrographs in 3dmod...\n")
 
 def main():
@@ -3645,7 +3722,7 @@ def main():
     if args.view_in_3dmod:
         micrograph_files = find_micrograph_files(structure_names)
         if micrograph_files:
-            threading.Thread(target=view_in_3dmod_async, args=(micrograph_files,)).start()
+            threading.Thread(target=view_in_3dmod_async, args=(micrograph_files, args.imod_coordinate_file)).start()
 
     # Crop particles if requested
     if args.crop_particles:
