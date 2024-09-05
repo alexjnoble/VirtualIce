@@ -1,18 +1,17 @@
 # VirtualIce: Half-synthetic CryoEM Micrograph Generator
 
-VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects PDB, EMDB, or local structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise, dose damage, and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
+VirtualIce is a feature-rich half-synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects PDB, EMDB, or local structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise, dose damage, and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
 
 #### Features
 
-- Generates synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
+- Generates half-synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
 - Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate or too close to the edge.
-- Adds Poisson noise to particle frames and Gaussian noise to particles.
-- Adds dose-dependent damage to simulated frames.
+- Adds Poisson noise and dose-dependent damage to simulated frames and Gaussian noise to particles.
 - Applies the Contrast Transfer Function (CTF) to simulate microscope optics.
-- Control over particle aggregation.
-- Outputs micrographs in MRC, PNG, and JPEG formats.
-- Multi-core processing.
-- Extensive customization options including particle distribution, ice thickness, and microscope parameters.
+- Control over overlapping particles and particle aggregation.
+- Outputs micrographs in MRC, PNG, and JPEG formats, and optionally cropped particles as MRCs.
+- Multi-core and GPU processing.
+- Extensive customization options including particle distribution, ice thickness, microscope parameters, and downsampling.
 
 ## Requirements and Installation
 
