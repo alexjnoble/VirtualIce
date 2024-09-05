@@ -46,7 +46,7 @@ Basic example usage:
 
 Generates `-n` _10_ random micrographs of PDB `-s` _1TIM_.
 
-## Arguments
+Arguments:
 
 - `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
 - `-n`, `--num_images`: Number of micrographs to generate.
@@ -59,7 +59,7 @@ Advanced example usage:
 
 Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <i>n</i>on-random distribution of particles and `-ps` parallelizes micrograph generation across _2_ CPUs.
 
-## Arguments
+Arguments:
 
 - `-I`, `--imod_coordinate_file`: Also output one IMOD .mod coordinate file per micrograph.
 - `-P`, `--png`: Output in PNG format.
