@@ -1,4 +1,4 @@
-# VirtualIce: Synthetic CryoEM Micrograph Generator
+# VirtualIce: Half-synthetic CryoEM Micrograph Generator
 
 VirtualIce is a feature-rich synthetic cryoEM micrograph generator that uses buffer cryoEM micrographs with junk and carbon masked out as real background. It projects PDB, EMDB, or local structures onto buffer cryoEM micrographs, simulating realistic imaging conditions by adding noise, dose damage, and applying CTF to particles. It outputs particle coordinates after masking out junk. It outputs particles if requested.
 
