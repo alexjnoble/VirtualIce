@@ -745,7 +745,7 @@ def download_pdb(pdb_id, suppress_errors=False):
     downloaded_any = False
 
     if not suppress_errors:
-        print_and_log(f"Downloading PDB {pdb_id}...")
+        print_and_log(f"[{pdb_id}] Downloading PDB {pdb_id}...")
 
     try:  # Try downloading the symmetrized .pdb1.gz file
         request.urlretrieve(symmetrized_url, symmetrized_pdb_gz_path)
@@ -779,11 +779,11 @@ def download_pdb(pdb_id, suppress_errors=False):
     # Determine the largest .pdb file and remove the other one if both exist
     if os.path.exists(regular_pdb_path) and os.path.exists(symmetrized_pdb_path):
         if os.path.getsize(symmetrized_pdb_path) > os.path.getsize(regular_pdb_path):
-            print_and_log(f"Downloaded symmetrized PDB {pdb_id}")
+            print_and_log(f"[{pdb_id}] Downloaded symmetrized PDB {pdb_id}")
             os.remove(regular_pdb_path)
             os.rename(symmetrized_pdb_path, regular_pdb_path)
         else:
-            print_and_log(f"Downloaded PDB {pdb_id}")
+            print_and_log(f"[{pdb_id}] Downloaded PDB {pdb_id}")
             os.remove(symmetrized_pdb_path)
     elif os.path.exists(symmetrized_pdb_path):
         os.rename(symmetrized_pdb_path, regular_pdb_path)
@@ -870,7 +870,7 @@ def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
 
         # Download the gzipped map file
         if not suppress_errors:
-            print_and_log(f"Downloading EMD-{emdb_id}...")
+            print_and_log(f"[emd_{emdb_id}] Downloading EMD-{emdb_id}...")
         request.urlretrieve(url, local_filename)
 
         # Decompress the downloaded file
@@ -881,7 +881,7 @@ def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
         # Remove the compressed file after decompression
         os.remove(local_filename)
 
-        print_and_log(f"Download and decompression complete for EMD-{emdb_id}.")
+        print_and_log(f"[emd_{emdb_id}] Download and decompression complete for EMD-{emdb_id}.")
         sample_name = get_emdb_sample_name(emdb_id)
         print_and_log(f"[emd_{emdb_id}] Sample name: {sample_name}")
         return True
@@ -1388,8 +1388,8 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
         - tuple 1: The (x, y) coordinates of the particle.
         - tuple 2: The (alpha, beta, gamma) Euler angles representing the orientation of the particle.
     :param list output_path: Output base filename.
-    :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
+    :param bool imod_coordinate_file: Whether to save IMOD .mod coordinate files.
+    :param bool coord_coordinate_file: Whether to save .coord coordinate files.
     :param float defocus: The defocus value to add to the STAR file.
 
     This function writes a .star file and optionally a .mod and .coord file.
@@ -1400,11 +1400,11 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
     # Save .star file
     write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations, orientations, defocus)
 
-    # Save IMOD .mod files
+    # Save IMOD .mod files if requested
     if imod_coordinate_file:
         write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod")
 
-    # Save .coord files
+    # Save .coord files if requested
     if coord_coordinate_file:
         write_coord_file(particle_locations, os.path.splitext(output_path)[0] + ".coord")
 
@@ -2024,13 +2024,14 @@ def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_perce
 
     return trimmed_mrc_array, num_particles_to_project, max_num_particles
 
-def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context):
+def determine_ice_and_particle_behavior(args, structure, structure_name, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context):
     """
     Determine ice and particle behaviors: First trim the volume and determine possible numbers of particles,
     then determine ice thickness, then determine particle distribution, then determine particle aggregation.
 
     :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
     :param numpy_array structure: 3D numpy array of the structure for which to generate projections.
+    :param str structure_name: Name of the structure.
     :param numpy_array micrograph: 2D numpy array representing the ice micrograph.
     :param float ice_scaling_fudge_factor: Fudge factor for making particles look dark enough.
     :param list remaining_aggregation_amounts: Keep track of aggregation amounts to not repeat them.
@@ -2038,7 +2039,7 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
     :return tuple: ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"{context} Trimming the mrc...")
+    print_and_log(f"{context} Trimming the mrc ({structure_name})...")
     # Set `num_particles` based on the user input (args.num_particles) with the following rules:
     # 1. If the user provides a value for `args.num_particles` and it is <= the `max_num_particles`, use it.
     # 2. If the user does not provide a value, use `rand_num_particles`.
@@ -2054,9 +2055,9 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
              max_num_particles)
 
     if args.num_particles:
-        print_and_log(f"{context} Attempting to find {int(num_particles)} particle locations in the micrograph...")
+        print_and_log(f"{context} Attempting to find {int(num_particles)} particle locations for {structure_name} in the micrograph...")
     else:
-        print_and_log(f"{context} Choosing a random number of particles to add to the micrograph...")
+        print_and_log(f"{context} Choosing a random number of particles for {structure_name} to add to the micrograph...")
 
     # Random or user-specified ice thickness
     # Adjust the relative ice thickness to work mathematically
@@ -2097,7 +2098,7 @@ def determine_ice_and_particle_behavior(args, structure, micrograph, ice_scaling
                 # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                 num_particles = max(num_particles // 4, 2)
 
-    print_and_log(f"{context} {num_particles} particles will be added to the micrograph")
+    print_and_log(f"{context} {num_particles} particles of {structure_name} will be added to the micrograph")
 
     if args.aggregation_amount:
         if not remaining_aggregation_amounts:
@@ -3040,12 +3041,12 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
             # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
             filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) based on the JSON file.")
+            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s) based on the JSON file.")
         else:
             print_and_log(f"{context} No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
             filtered_particle_locations = particle_locations
     else:
-        print_and_log(f"{context} Skipping junk filtering (i.e., not using JSON file)")
+        print_and_log(f"{context} Skipping junk filtering for {structure_name} (i.e., not using JSON file)")
         filtered_particle_locations = particle_locations
 
     # Edge Particle Filtering
@@ -3067,9 +3068,9 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
 
         num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
         if num_particles_removed > 0:
-            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s) due to being too close to the edge.")
+            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s) due to being too close to the edge.")
         else:
-            print_and_log(f"{context} 0 particles removed from coordinate file(s) due to being too close to the edge.")
+            print_and_log(f"{context} 0 particles removed for {structure_name} from coordinate file(s) due to being too close to the edge.")
         filtered_particle_locations = remaining_particle_locations
 
     # Overlapping Particle Filtering - for Coordinate Files only
@@ -3077,9 +3078,9 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
         filtered_particle_locations = filter_out_overlapping_particles(filtered_particle_locations, input_options['half_small_image_width'])
         num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
         if num_particles_removed > 0:
-            print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed from coordinate file(s).")
+            print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s).")
         else:
-            print_and_log(f"{context} 0 particles removed from coordinate file(s) due to overlapping.")
+            print_and_log(f"{context} 0 particles removed for {structure_name} from coordinate file(s) due to overlapping.")
 
     # Ensure small_images and particle_locations are the same length
     if len(small_images) > len(particle_locations):
@@ -3171,7 +3172,7 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
     result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options,
                                                              simulation_options, junk_labels_options, output_options, context, defocus)
 
-    # Save the resulting micrograph in specified formats
+    # Save the resulting micrograph in the specified formats
     if output_options['save_as_mrc']:
         print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.mrc...")
         writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
@@ -3423,7 +3424,7 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
 
     # Determine ice and particle behavior parameters
     ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
-        args, structure, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context)
+        args, structure, structure_name, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context)
 
     # Generate projections with the specified orientation mode
     print_and_log(f"{context} Projecting the structure volume ({structure_name}) {num_particles} times...")
