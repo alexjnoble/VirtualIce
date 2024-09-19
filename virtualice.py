@@ -22,7 +22,7 @@
 # IMOD source code & packages: https://bio3d.colorado.edu/imod/
 #
 # Ensure compliance with license terms when obtaining and using EMAN2 & IMOD.
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import os
 import re
