@@ -5,18 +5,37 @@ VirtualIce is a feature-rich half-synthetic cryoEM micrograph generator that use
 
 ## Release Notes
 
-### v1.0.0 - September 10, 2024
+### v2.0.0beta - September 19, 2024
 
 #### Features
 
-- Generates half-synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
-- Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate or too close to the edge.
-- Adds Poisson noise and dose-dependent damage to simulated frames and Gaussian noise to particles.
-- Applies the Contrast Transfer Function (CTF) to simulate microscope optics.
-- Control over overlapping particles and particle aggregation.
-- Outputs micrographs in MRC, PNG, and JPEG formats, and optionally cropped particles as MRCs.
-- Multi-core and GPU processing.
-- Extensive customization options including particle distribution, ice thickness, microscope parameters, and downsampling.
+- Multiple structures can now be requested (structure sets).
+  - Use the same --structures flag followed by either a single structure or multiple. Supports any number of structure sets, like this: 
+    virtualice.py -s 1TIM [1PMA, 50882] [my_structure1.mrc, 3DRE, 6TIM]
+  - The above command will make one set of micrographs with only PDB 1TIM, another set with PDB 1PMA and EMD-50882, and another set with a local file (my_structure1.mrc), PDB 3DRE, and PDB 6TIM.
+  - Preferred orientation, particle distributions, and overlapping & aggregated particles are fully supported.
+  - Filtering of edge, overlapping, and obscured particles is fully supported.
+   - Coordinate files are saved independently in .star, .mod, and/or .coord files (one per structure in a structure set).
+- This update is significant because it allows for ground-truth datasets of heterogeneous proteins - e.g. continuous or discrete conformations, compositional heterogeneity, or completely different proteins.
+
+<details><summary>v1.0.1 - September 19, 2024</summary><p>
+ 
+   - Last release of VirtualIce for single-structure micrographs. Contains minor printout updates compared to v1.0.0.
+
+</p></details>
+
+<details><summary>v1.0.0 - September 10, 2024</summary><p>
+ 
+   - Generates half-synthetic cryoEM micrographs and particles from buffer images and PDB IDs, EMDB IDs, or local files.
+   - Creates coordinate files (.star, .mod, .coord), not including particles obscured by junk/substrate or too close to the edge.
+   - Adds Poisson noise and dose-dependent damage to simulated frames and Gaussian noise to particles.
+   - Applies the Contrast Transfer Function (CTF) to simulate microscope optics.
+   - Control over overlapping particles and particle aggregation.
+   - Outputs micrographs in MRC, PNG, and JPEG formats, and optionally cropped particles as MRCs.
+   - Multi-core and GPU processing.
+   - Extensive customization options including particle distribution, ice thickness, microscope parameters, and downsampling.
+
+</p></details>
 
 ## Requirements and Installation
 
