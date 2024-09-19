@@ -22,10 +22,11 @@
 # IMOD source code & packages: https://bio3d.colorado.edu/imod/
 #
 # Ensure compliance with license terms when obtaining and using EMAN2 & IMOD.
-__version__ = "1.0.1"
+__version__ = "2.0.0beta"
 
 import os
 import re
+import ast
 import cv2
 import sys
 import glob
@@ -48,6 +49,7 @@ import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 from multiprocessing import Pool
+from scipy.spatial import KDTree
 from urllib import request, error
 from xml.etree import ElementTree as ET
 from scipy.ndimage import affine_transform
@@ -114,6 +116,90 @@ def check_binning(value):
         return ivalue
     except ValueError:
         raise argparse.ArgumentTypeError("Binning must be an integer between 2 and 64")
+
+def format_structure_sets(structure_sets):
+    """
+    Formats a list of structure sets for printing in the run configuration.
+
+    Each structure set can contain one or more structures. The function formats
+    each structure set as a string for display purposes, showing single structures
+    without brackets and multiple structures enclosed in brackets.
+
+    Example:
+    - Input: [['1PMA'], ['1TIM']]
+      Output: "1PMA, 1TIM"
+
+    - Input: [[['1PMA'], ['1TIM']], [['my_structure.mrc'], ['rp']]]
+      Output: "[1PMA, 1TIM], [my_structure.mrc, rp]"
+
+    :param list_of_lists structure_sets: A list of structure sets, where each set is a list of structure IDs.
+    :return list_of_str: A list of formatted structure sets as strings.
+    """
+    formatted_sets = []
+
+    # Iterate over each structure set
+    for structure_set in structure_sets:
+        # Check if the structure_set contains multiple structures
+        if isinstance(structure_set[0], list):
+            # Flatten the list of lists and join them with commas
+            flat_set = [s[0] for s in structure_set]  # Extract strings from the inner lists
+            formatted_sets.append(f"[{', '.join(flat_set)}]")
+        else:
+            # If it's a single structure, just add it as is (without brackets)
+            formatted_sets.append(structure_set[0])
+
+    return formatted_sets
+
+def parse_structure_input(structure_input):
+    """
+    Parses the structure input argument into a list of structure sets.
+
+    Each structure set can contain one or more structures, and each structure set will be applied 
+    to generate a corresponding set of micrographs. The input can handle both single-structure-per-micrograph 
+    and multiple-structures-per-micrograph formats in the forms:
+
+    1. Single structures per micrograph. Example: ['1TIM', 'mystructure.mrc', 'rp']
+         This will be outputted as a list of lists: [['1PMA'], ['1TIM']]
+
+    2. Multiple structures per micrograph. Example: ['[1PMA,', '1TIM]', '[my_structure2.mrc,', 'rp]']
+         This will be outputted as a list of lists of lists: [[['1PMA'], ['1TIM']], [['my_structure2.mrc'], ['rp']]]
+
+    :param list_of_str structure_input: List of structure input arguments from the command line.
+    :return list_of_lists or list_of_lists_of_lists: A list of structure sets, where each set is a list of structure IDs.
+    :raises argparse.ArgumentTypeError: If the structure input format is invalid.
+    """
+    structure_sets = []
+    current_set = []
+    in_bracket = False
+
+    for item in structure_input:
+        if item.startswith('['):
+            if in_bracket:
+                raise argparse.ArgumentTypeError(f"Nested brackets are not allowed: {item}")
+            in_bracket = True
+            current_set = []
+            item = item[1:]  # Remove opening bracket
+
+        if item.endswith(']'):
+            if not in_bracket:
+                raise argparse.ArgumentTypeError(f"Closing bracket without opening bracket: {item}")
+            in_bracket = False
+            item = item[:-1]  # Remove closing bracket
+
+        structures = [s.strip() for s in item.split(',') if s.strip()]
+        current_set.extend([[s] for s in structures])
+
+        if not in_bracket:
+            if len(current_set) > 1:
+                structure_sets.append(current_set)
+            else:
+                structure_sets.extend(current_set)
+            current_set = []
+
+    if in_bracket:
+        raise argparse.ArgumentTypeError("Unclosed bracket in input")
+
+    return structure_sets
 
 def parse_aggregation_amount(values, num_micrographs):
     """
@@ -281,8 +367,8 @@ def parse_arguments(script_start_time):
 
   3. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,90,0] [90 180 *] -aa l h r -ne --use_cpu -V 2 -3
      Generates 5 random micrographs of PDB 1PMA (proteasome) with preferred orientation for 90% of particles. The preferred orientations are defined
-     by random selections of [*,0,90] (free to rotate along the first Z axis, then do not rotate in Y, then rotate 90 degrees in Z) and
-     [90 180 0] (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then do not rotate in Z). The aggregation amount is
+     by random selections of [*,90,0] (free to rotate along the first Z axis, then rotate 90 degrees in Y, do not rotate in Z) and
+     [90 180 0] (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then free to rotate along the resulting Z). The aggregation amount is
      randomly chosen from low and high values for each of the 5 micrographs. Edge particles are not included. Only CPUs are used (no GPUs).
      Terminal verbosity is set to 2. The resulting micrographs are opened with 3dmod after generation.
     """,
@@ -290,7 +376,7 @@ def parse_arguments(script_start_time):
 
     # Input Options
     input_group = parser.add_argument_group('\033[1mInput Options\033[0m')
-    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. Separate structures with spaces. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
+    input_group.add_argument("-s", "--structures", type=str, nargs='+', default=['1TIM', '19436', 'r'], help="PDB ID(s), EMDB ID(s), names of local .pdb or .mrc/.map files, 'r' or 'random' for a random PDB or EMDB map, 'rp' for a random PDB, and/or 're' or 'rm' for a random EMDB map. Local .mrc/.map files must have voxel size in the header so that they are scaled properly. To specify multiple structures per micrograph, use brackets: [structure1, structure2]. Example: -s [my_structure1.mrc, 1TIM, rp] [my_structure2.mrc, 12345, re] or single structures like 1TIM my_structure.mrc rp. Note: PDB files are recommended because noise levels of .mrc/.map files are unpredictable. Default is %(default)s.")
     input_group.add_argument("-d", "--image_directory", type=str, default=os.path.join(installation_directory, "ice_images"), help="Local directory name where the micrographs are stored in mrc format. They need to be accompanied with a text file containing image names and defoci (see --image_list_file). Default directory is %(default)s")
     input_group.add_argument("-i", "--image_list_file", type=str, default=os.path.join(installation_directory, "ice_images/good_images_with_defocus.txt"), help="File containing local filenames of images with a defocus value after each filename (space between). Default is '%(default)s'.")
     input_group.add_argument("-me", "--max_emdb_size", type=float, default=512, help="The maximum allowed file size in megabytes. Default is %(default)s")
@@ -380,6 +466,8 @@ def parse_arguments(script_start_time):
     # Set verbosity level
     args.verbosity = 0 if args.quiet else args.verbosity
 
+    args.structures = parse_structure_input(args.structures)
+
     # Make local paths absolute
     args.image_list_file = os.path.abspath(args.image_list_file)
     args.image_directory = os.path.abspath(args.image_directory)
@@ -438,21 +526,24 @@ def parse_arguments(script_start_time):
         args.gpu_ids = None
         print_and_log("Using only CPUs for processing.", logging.DEBUG)
 
+    # Flatten args.structures to count the total number of structures across all sets
+    flattened_structures = [structure for structure_set in args.structures for structure in structure_set]
+
     # Automatically adjust parallelization settings based on available CPU cores
     available_cpus = os.cpu_count()
-    if args.parallelize_structures == None:
-        args.parallelize_structures = min(max(1, available_cpus // 4), len(args.structures))
+    if args.parallelize_structures is None:
+        # Parallelize based on the total number of structures across all sets
+        args.parallelize_structures = min(max(1, available_cpus // 4), len(flattened_structures))
     else:
-        args.parallelize_structures = min(args.parallelize_structures, len(args.structures))
-    if args.parallelize_micrographs == None:
+        args.parallelize_structures = min(args.parallelize_structures, len(flattened_structures))
+
+    if args.parallelize_micrographs is None:
         args.parallelize_micrographs = min(max(1, available_cpus // 4), args.num_images)
     else:
         args.parallelize_micrographs = min(args.parallelize_micrographs, args.num_images)
-    if args.cpus == None:
-        args.cpus = max(1, available_cpus - args.parallelize_structures - args.parallelize_micrographs)
 
-    # Remove duplicate --structures
-    args.structures = remove_duplicates_structures(args.structures)
+    if args.cpus is None:
+        args.cpus = max(1, available_cpus - args.parallelize_structures - args.parallelize_micrographs)
 
     # Convert short particle distribution to full distribution name
     distribution_mapping = {'r': 'random', 'n': 'non_random', 'm': 'micrograph', 'g': 'gaussian', 'c': 'circular', 'ic': 'inverse_circular'}
@@ -512,15 +603,20 @@ def parse_arguments(script_start_time):
     formatted_output = formatted_output.rstrip(";\n")  # Remove the trailing semicolon
     argument_printout = textwrap.fill(formatted_output, width=80)  # Wrap the output text to fit in rows and columns
 
+    # Print run configuration
     print_and_log(f"\033[1m{'-' * 80}\n{('VirtualIce Run Configuration').center(80)}\n{'-' * 80}\033[0m", logging.WARNING)
-    print_and_log(textwrap.fill(f"Generating {args.num_images} synthetic micrograph{'' if args.num_images == 1 else 's'} per structure ({', '.join(args.structures)}) using micrographs in {args.image_directory.rstrip('/')}/", width=80), logging.WARNING)
+
+    # Display structure sets – format each structure set correctly
+    structure_sets_str = ', '.join(format_structure_sets(args.structures))
+
+    print_and_log(textwrap.fill(f"Generating {args.num_images} synthetic micrograph{'' if args.num_images == 1 else 's'} per structure set ({structure_sets_str}) using micrographs in {args.image_directory.rstrip('/')}/", width=80), logging.WARNING)
     print_and_log(f"\nInput command: {' '.join(sys.argv)}", logging.DEBUG)
     print_and_log("\nInput arguments:\n", logging.WARNING)
     print_and_log(argument_printout, logging.WARNING)
     print_and_log(f"\033[1m{'-' * 80}\033[0m\n", logging.WARNING)
 
-    # This is put after the printout because it can create large lists depending on user input
-    args.aggregation_amount = parse_aggregation_amount(args.aggregation_amount, args.num_images * len(args.structures))
+    # Adjust aggregation amounts based on the total number of micrographs (each set has its own micrographs)
+    args.aggregation_amount = parse_aggregation_amount(args.aggregation_amount, args.num_images * len(flattened_structures))
 
     return args
 
@@ -780,11 +876,11 @@ def download_pdb(pdb_id, suppress_errors=False):
     if os.path.exists(regular_pdb_path) and os.path.exists(symmetrized_pdb_path):
         if os.path.getsize(symmetrized_pdb_path) > os.path.getsize(regular_pdb_path):
             print_and_log(f"[{pdb_id}] Downloaded symmetrized PDB {pdb_id}")
-            os.remove(regular_pdb_path)
+            os.path.exists(regular_pdb_path) and os.remove(regular_pdb_path)
             os.rename(symmetrized_pdb_path, regular_pdb_path)
         else:
             print_and_log(f"[{pdb_id}] Downloaded PDB {pdb_id}")
-            os.remove(symmetrized_pdb_path)
+            os.path.exists(symmetrized_pdb_path) and os.remove(symmetrized_pdb_path)
     elif os.path.exists(symmetrized_pdb_path):
         os.rename(symmetrized_pdb_path, regular_pdb_path)
 
@@ -837,10 +933,10 @@ def get_emdb_sample_name(emd_number):
             else:
                 return None  # XML file not found or error
     except Exception as e:
-        print_and_log(f"Error fetching XML data: {e}", logging.DEBUG)
+        print_and_log(f"Error fetching XML data: {e}", logging.ERROR)
         return None
     except request.HTTPError as e:
-        print_and_log(f"HTTP Error fetching XML data: {e}", logging.DEBUG)
+        print_and_log(f"HTTP Error fetching XML data: {e}", logging.ERROR)
         return None
 
 def download_emdb(emdb_id, max_emdb_size, suppress_errors=False):
@@ -1109,7 +1205,7 @@ def scale_mrc_file(input_mrc_path, pixelsize):
         output = subprocess.run(command, capture_output=True, text=True, check=True)
         print_and_log(output, logging.DEBUG)
     except subprocess.CalledProcessError as e:
-        print_and_log(f"Error during scaling operation: {e}", logging.WARNING)
+        print_and_log(f"Error during scaling operation: {e}", logging.ERROR)
 
 def reorient_mrc(input_mrc_path):
     """
@@ -1121,7 +1217,7 @@ def reorient_mrc(input_mrc_path):
     :param str input_mrc_path: The path to the input MRC file.
     """
     print_and_log("", logging.DEBUG)
-    data = readmrc(input_mrc_path)
+    data = read_mrc(input_mrc_path)
 
     # Get the coordinates of non-zero voxels
     non_zero_indices = np.argwhere(data)
@@ -1176,7 +1272,7 @@ def convert_pdb_to_mrc(pdb_name, apix, res):
         print_and_log(f"[{pdb_name}]Warning: Mass not found for PDB. Setting mass to 0.", logging.WARNING)
     return mass
 
-def readmrc(mrc_path):
+def read_mrc(mrc_path):
     """
     Read an MRC file and return its data as a NumPy array.
 
@@ -1190,7 +1286,7 @@ def readmrc(mrc_path):
 
     return numpy_array
 
-def writemrc(mrc_path, numpy_array, pixelsize=1.0):
+def write_mrc(mrc_path, numpy_array, pixelsize=1.0):
     """
     Write a 2D or 3D NumPy array as an MRC file with specified pixel size.
 
@@ -1379,26 +1475,30 @@ def write_coord_file(coordinates, output_file):
         for x, y in coordinates:
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
 
-def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, imod_coordinate_file, coord_coordinate_file, defocus):
+def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, 
+                              micrograph_output_path, imod_coordinate_file, coord_coordinate_file, defocus):
     """
     Saves particle coordinates in specified formats (.star, .mod, .coord).
 
-    :param str structure_name: Base name for the output files.
+    :param str structure_name: Name of the structure.
     :param list_of_tuples particle_locations_with_orientations: List of tuples where each tuple contains:
         - tuple 1: The (x, y) coordinates of the particle.
         - tuple 2: The (alpha, beta, gamma) Euler angles representing the orientation of the particle.
-    :param list output_path: Output base filename.
-    :param bool imod_coordinate_file: Whether to save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to save .coord coordinate files.
+    :param str output_path: Base path for the output files.
+    :param bool imod_coordinate_file: Whether to output IMOD .mod files.
+    :param bool coord_coordinate_file: Whether to output .coord files.
     :param float defocus: The defocus value to add to the STAR file.
 
-    This function writes a .star file and optionally a .mod and .coord file.
+    This function writes a .star file and optionally generates .mod and .coord files.
     """
     print_and_log("", logging.DEBUG)
+
+    # Extract particle locations and orientations
     particle_locations = [loc for loc, ori in particle_locations_with_orientations]
     orientations = [ori for loc, ori in particle_locations_with_orientations]
-    # Save .star file
-    write_all_coordinates_to_star(structure_name, output_path + ".mrc", particle_locations, orientations, defocus)
+
+    # Save coordinates to .star file for the current structure
+    write_all_coordinates_to_star(structure_name, micrograph_output_path + ".mrc", particle_locations, orientations, defocus)
 
     # Save IMOD .mod files if requested
     if imod_coordinate_file:
@@ -1746,7 +1846,7 @@ def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
         filename = os.path.basename(image_path)
         name, ext = os.path.splitext(filename)
         if ext == '.mrc':
-            image = readmrc(image_path)
+            image = read_mrc(image_path)
         elif ext in ['.png', '.jpeg']:
             image = cv2.imread(image_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -1764,7 +1864,7 @@ def downsample_micrograph(image_path, downsample_factor, pixelsize, use_gpu):
         # Save the downsampled micrograph with the same name plus _bin## in the binned directory
         binned_image_path = os.path.join(bin_dir, f"{name}_bin{downsample_factor}{ext}")
         if ext == '.mrc':
-            writemrc(binned_image_path, downsampled_image.astype(np.float32), downsample_factor * pixelsize)
+            write_mrc(binned_image_path, downsampled_image.astype(np.float32), downsample_factor * pixelsize)
         else:  # ext == .png/.jpeg
             # Normalize image to [0, 255] and convert to uint8
             downsampled_image -= downsampled_image.min()
@@ -1791,7 +1891,7 @@ def parallel_downsample_micrographs(image_directory, downsample_factor, pixelsiz
     image_paths = [os.path.join(image_directory, filename) for filename in os.listdir(image_directory) if os.path.splitext(filename)[1].lower() in image_extensions]
 
     if use_gpu:
-        image_size = readmrc(next(file for file in image_paths if file.endswith('.mrc'))).nbytes
+        image_size = read_mrc(next(file for file in image_paths if file.endswith('.mrc'))).nbytes
         batch_sizes = {}
         # Determine batch size for each GPU based on its available memory and utilization
         for gpu_id in gpu_ids:
@@ -1902,11 +2002,12 @@ def downsample_coord_file(input_coord, output_coord, downsample_factor):
                 # Write the downsampled coordinates to the output file
                 outfile.write(f"{x:.2f} {y:.2f}\n")
 
-def downsample_coordinate_files(structure_name, binning, imod_coordinate_file, coord_coordinate_file):
+def downsample_coordinate_files(structure_name, structure_set_name, binning, imod_coordinate_file, coord_coordinate_file):
     """
     Downsample coordinate files based on the specified binning factor.
 
     :param str structure_name: Name of the structure.
+    :param str structure_set_name: Name of the structure set.
     :param int binning: The factor by which to downsample the coordinates.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
@@ -1914,20 +2015,20 @@ def downsample_coordinate_files(structure_name, binning, imod_coordinate_file, c
     print_and_log("", logging.DEBUG)
     downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{binning}.star", binning)
     if imod_coordinate_file:
-        for filename in os.listdir(f"{structure_name}/"):
+        for filename in os.listdir(f"{structure_set_name}/"):
             if filename.endswith(".point"):
-                input_file = os.path.join(f"{structure_name}/", filename)
-                output_point_file = os.path.join(f"{structure_name}/bin_{binning}/", filename.replace('.point', f'_bin{binning}.point'))
+                input_file = os.path.join(f"{structure_set_name}/", filename)
+                output_point_file = os.path.join(f"{structure_set_name}/bin_{binning}/", filename.replace('.point', f'_bin{binning}.point'))
                 # First downsample the .point files
                 downsample_point_file(input_file, output_point_file, binning)
                 # Then convert all of the .point files to .mod files
                 mod_file = os.path.splitext(output_point_file)[0] + ".mod"
                 convert_point_to_model(output_point_file, mod_file)
     if coord_coordinate_file:
-        for filename in os.listdir(f"{structure_name}/"):
+        for filename in os.listdir(f"{structure_set_name}/"):
             if filename.endswith(".coord"):
-                input_file = os.path.join(f"{structure_name}/", filename)
-                output_coord_file = os.path.join(f"{structure_name}/bin_{binning}/", filename.replace('.coord', f'_bin{binning}.coord'))
+                input_file = os.path.join(f"{structure_set_name}/", filename)
+                output_coord_file = os.path.join(f"{structure_set_name}/bin_{binning}/", filename.replace('.coord', f'_bin{binning}.coord'))
                 # First downsample the .coord files
                 downsample_coord_file(input_file, output_coord_file, binning)
 
@@ -2048,7 +2149,7 @@ def determine_ice_and_particle_behavior(args, structure, structure_name, microgr
 
     structure, rand_num_particles, max_num_particles = trim_vol_determine_particle_numbers(
         structure, micrograph, args.scale_percent, args.allow_overlap, args.num_particle_layers, args.num_particles)
-    
+
     num_particles = (max_num_particles if str(args.num_particles).lower() == 'max' else
              args.num_particles if args.num_particles and isinstance(args.num_particles, int) and args.num_particles <= max_num_particles else
              rand_num_particles if not args.num_particles else
@@ -2429,163 +2530,91 @@ def generate_projections(structure, num_projections, orientation_mode, preferred
 
     return np.array(projections), orientations
 
-def generate_particle_locations(micrograph_image, image_size, num_small_images, half_small_image_width, 
+def generate_particle_locations(micrograph_image, image_size, num_particles_per_structure, half_small_image_widths, 
                                 border_distance, no_edge_particles, dist_type, non_random_dist_type, 
                                 aggregation_amount, allow_overlap):
     """
-    Generate random/non-random locations for particles within an image.
+    Generate random/non-random locations for particles from multiple structures within an image.
+
+    Particles from multiple structures are placed without overlaps (if not allowed) across all structures.
+    The size of each structure (represented by `half_small_image_width`) is taken into account when placing particles.
 
     :param numpy_array micrograph_image: Micrograph image (used only in the 'micrograph' distribution option).
     :param tuple image_size: The size of the image as a tuple (width, height).
-    :param int num_small_images: The number of small images (particles) to generate coordinates for.
-    :param int half_small_image_width: Half the width of a small image.
+    :param list num_particles_per_structure: A list containing the number of particles for each structure.
+    :param list half_small_image_widths: A list containing half the widths of the particles for each structure.
     :param int border_distance: The minimum distance between particles and the image border.
     :param bool no_edge_particles: Prevent particles from being placed up to the edge of the micrograph.
     :param str dist_type: Particle location generation distribution type - 'random' or 'non_random'.
     :param str non_random_dist_type: Type of non-random distribution when dist_type is 'non_random';
-                                     ie. 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
+                                     e.g., 'circular', 'inverse_circular', 'gaussian', or 'micrograph'.
     :param float aggregation_amount: Amount of particle aggregation.
     :param bool allow_overlap: Flag to allow overlapping particles.
-    :return list_of_tuples: A list of particle locations as tuples (x, y).
+    :return list_of_lists, optional_prob_map: A list of particle locations for each structure, and the optional probability map.
     """
     print_and_log("", logging.DEBUG)
-    width, height = image_size
+    height, width = image_size
 
-    # If no_edge_particles is set, respect the user-defined --border value, 
-    # otherwise use half of the particle box size as the default minimum distance from the edge
-    border_distance = max(border_distance, half_small_image_width) if no_edge_particles else -1
+    # Initialize list for storing particle locations for each structure
+    all_particle_locations = [[] for _ in range(len(num_particles_per_structure))]
+    global_particle_locations = []  # List to keep track of all particle positions regardless of structure
 
-    particle_locations = []
+    # Adjust border distance
+    if no_edge_particles:
+        border_distances = [max(border_distance, hsw) for hsw in half_small_image_widths]
+    else:
+        border_distances = [0 for _ in half_small_image_widths]  # Minimum border distance is 0
 
-    def is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-        """
-        Check if a new particle location is far enough from existing particle locations.
+    # Step 1: Calculate the total number of particles across all structures
+    total_particles = sum(num_particles_per_structure)
 
-        :param tuple new_particle_location: The new particle location as a tuple (x, y).
-        :param list_of_tuples particle_locations: The existing particle locations.
-        :param int half_small_image_width: Half the width of a small image.
-        :param bool allow_overlap: Flag to allow overlapping particles.
-        :return bool: True if the new particle location is far enough or if overlapping is allowed, False otherwise.
-        """
-        if allow_overlap:
-            # Bypass the distance check if overlapping is allowed
-            return True
+    # Step 2: Generate candidate positions for all particles
+    # Depending on the distribution, generate positions accordingly
+    # We will generate extra candidates to account for overlap rejections
+    candidate_multiplier = 1.5 if not allow_overlap else 1.0  # Generate more candidates if overlaps are not allowed
+    num_candidates = int(total_particles * candidate_multiplier)
 
-        # Check distance to all existing particles
-        for particle_location in particle_locations:
-            distance = np.sqrt((new_particle_location[0] - particle_location[0])**2 + 
-                               (new_particle_location[1] - particle_location[1])**2)
-            if distance < half_small_image_width:
-                return False  # Indicating overlap
-
-        return True  # No overlap found
-
-    max_attempts = 1000  # Maximum number of attempts to find an unoccupied point in the distribution
-
+    # Generate positions based on the distribution type
     if dist_type == 'random':
-        attempts = 0  # Counter for attempts to find a valid position
-        # Keep generating and appending particle locations until we have enough.
-        while len(particle_locations) < num_small_images and attempts < max_attempts:
-            x = np.random.randint(border_distance, width - border_distance)
-            y = np.random.randint(border_distance, height - border_distance)
-            new_particle_location = (x, y)
-            
-            if allow_overlap:
-                # Directly add the new particle location if overlapping is allowed
-                particle_locations.append(new_particle_location)
-            else:
-                # Check if the new particle location is far enough from existing ones
-                if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-                    particle_locations.append(new_particle_location)
-                    attempts = 0  # Reset attempts counter after successful addition
-                else:
-                    attempts += 1  # Increment attempts counter if addition is unsuccessful
-
+        x_coords = np.random.randint(0, width, size=num_candidates)
+        y_coords = np.random.randint(0, height, size=num_candidates)
+        candidate_positions = np.column_stack((x_coords, y_coords))
     elif dist_type == 'non_random':
-        # Handle non-random distributions (circular, inverse_circular, gaussian, micrograph)
         if non_random_dist_type == 'circular':
-            # Make a circular cluster of particles
+            # Generate positions in a circular cluster
             cluster_center = (width // 2, height // 2)
-            attempts = 0  # Counter for attempts to find a valid position
-
-            # Keep generating and appending particle locations until we have enough.
-            while len(particle_locations) < num_small_images and attempts < max_attempts:
-                # Generate random angle and radius for polar coordinates.
-                angle = np.random.uniform(0, 2 * np.pi)
-                radius = np.random.uniform(0, min(cluster_center[0], height - cluster_center[1]) - half_small_image_width)
-                # Convert polar to Cartesian coordinates.
-                x = int(cluster_center[0] + radius * np.cos(angle))
-                y = int(cluster_center[1] + radius * np.sin(angle))
-                new_particle_location = (x, y)
-                
-                if allow_overlap:
-                    particle_locations.append(new_particle_location)
-                else:
-                    if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-                        particle_locations.append(new_particle_location)
-                        attempts = 0
-                    else:
-                        attempts += 1
-
+            radius = min(cluster_center[0], cluster_center[1])
+            angles = np.random.uniform(0, 2 * np.pi, num_candidates)
+            radii = np.sqrt(np.random.uniform(0, 1, num_candidates)) * radius
+            x_coords = cluster_center[0] + radii * np.cos(angles)
+            y_coords = cluster_center[1] + radii * np.sin(angles)
+            candidate_positions = np.column_stack((x_coords.astype(int), y_coords.astype(int)))
         elif non_random_dist_type == 'inverse_circular':
-            # Parameters for the exclusion zone
-            # Randomly determine the center within the image, away from the edges
-            exclusion_center_x = np.random.randint(border_distance + half_small_image_width, width - border_distance - half_small_image_width)
-            exclusion_center_y = np.random.randint(border_distance + half_small_image_width, height - border_distance - half_small_image_width)
-            exclusion_radius = np.random.randint(half_small_image_width, min(width // 2, height // 2))
-
-            attempts = 0
-            while len(particle_locations) < num_small_images and attempts < max_attempts:
-                x = np.random.randint(border_distance, width - border_distance)
-                y = np.random.randint(border_distance, height - border_distance)
-                new_particle_location = (x, y)
-                # Check if the location is outside the exclusion zone
-                if np.sqrt((x - exclusion_center_x) ** 2 + (y - exclusion_center_y) ** 2) > exclusion_radius:
-                    if allow_overlap:
-                        particle_locations.append(new_particle_location)
-                    else:
-                        if is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-                            particle_locations.append(new_particle_location)
-                            attempts = 0
-                        else:
-                            attempts += 1
-                else:
-                    attempts += 1
-
+            # Exclude a circular region in the center
+            exclusion_center = (width // 2, height // 2)
+            exclusion_radius = min(width, height) * 0.3  # Adjust as needed
+            max_radius = np.hypot(width, height)
+            angles = np.random.uniform(0, 2 * np.pi, num_candidates)
+            radii = np.sqrt(np.random.uniform(exclusion_radius**2, max_radius**2, num_candidates))
+            x_coords = exclusion_center[0] + radii * np.cos(angles)
+            y_coords = exclusion_center[1] + radii * np.sin(angles)
+            candidate_positions = np.column_stack((x_coords.astype(int), y_coords.astype(int)))
         elif non_random_dist_type == 'gaussian':
+            # Generate positions from multiple Gaussian clusters
             num_gaussians = np.random.randint(1, 6)
-            gaussians = []
-            # For each Gaussian distribution:
+            particles_per_gaussian = num_candidates // num_gaussians
+            candidate_positions = []
             for _ in range(num_gaussians):
-                # Randomly determine its center and standard deviation.
-                center = np.array([np.random.uniform(border_distance, width - border_distance),
-                                np.random.uniform(border_distance, height - border_distance)])
-                stddev = np.random.uniform(half_small_image_width, min(center[0] - border_distance,
-                                                                    width - center[0] - border_distance,
-                                                                    center[1] - border_distance,
-                                                                    height - center[1] - border_distance))
-                gaussians.append((center, stddev))
-
-            attempts = 0
-            while len(particle_locations) < num_small_images and attempts < max_attempts:
-                chosen_gaussian = np.random.choice(num_gaussians)
-                center, stddev = gaussians[chosen_gaussian]
-                x = int(np.random.normal(center[0], stddev))
-                y = int(np.random.normal(center[1], stddev))
-                new_particle_location = (x, y)
-                
-                if allow_overlap:
-                    particle_locations.append(new_particle_location)
-                else:
-                    if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-                        particle_locations.append(new_particle_location)
-                        attempts = 0
-                    else:
-                        attempts += 1
-
+                center_x = np.random.uniform(0, width)
+                center_y = np.random.uniform(0, height)
+                stddev = min(width, height) / 10  # Adjust as needed
+                x_coords = np.random.normal(center_x, stddev, particles_per_gaussian)
+                y_coords = np.random.normal(center_y, stddev, particles_per_gaussian)
+                candidate_positions.extend(zip(x_coords.astype(int), y_coords.astype(int)))
+            candidate_positions = np.array(candidate_positions)
         elif non_random_dist_type == 'micrograph':
-            # Apply a Gaussian filter to the micrograph to obtain large-scale features
-            sigma = min(width, height) / 1  # Keep only low-resolution features. Something needs to be in the denominator otherwise the smoothing function breaks
+            # Use the micrograph to generate a probability map
+            sigma = min(width, height) / 4  # Adjust as needed
             itk_image = sitk.GetImageFromArray(micrograph_image)
             filtered_micrograph_itk = sitk.SmoothingRecursiveGaussian(itk_image, sigma=sigma)
             filtered_micrograph = sitk.GetArrayFromImage(filtered_micrograph_itk)
@@ -2594,56 +2623,93 @@ def generate_particle_locations(micrograph_image, image_size, num_small_images, 
             inverted_micrograph = np.max(filtered_micrograph) - filtered_micrograph
 
             # Normalize the inverted image to get probabilities
-            prob_map = inverted_micrograph / inverted_micrograph.sum()
+            prob_map = inverted_micrograph / np.sum(inverted_micrograph)
 
-            # Flatten the probability map and generate indices
+            # Flatten the probability map
             flat_prob_map = prob_map.ravel()
 
-            # Generate a large batch of random choices before the loop
-            batch_size = num_small_images * 10
-            random_indices = np.random.choice(flat_prob_map.size, size=batch_size, p=flat_prob_map)
+            # Generate candidate positions based on the probability map
+            indices = np.random.choice(len(flat_prob_map), size=num_candidates, p=flat_prob_map)
+            y_coords, x_coords = np.unravel_index(indices, prob_map.shape)
+            candidate_positions = np.column_stack((x_coords, y_coords))
 
-            # Initialize clump centers
-            num_clumps = max(1, int(num_small_images * np.random.uniform(0.1, 0.5)))
-            clump_centers = [(np.random.randint(border_distance, width - border_distance),
-                              np.random.randint(border_distance, height - border_distance)) for _ in range(num_clumps)]
-
-            # Initialize the attempt counter for 'micrograph' distribution
-            attempts = 0  # Reset attempts counter
-            index_counter = 0  # Counter to iterate through the batch of random choices
-            while len(particle_locations) < num_small_images and index_counter < batch_size and attempts < max_attempts:
-                chosen_index = random_indices[index_counter]
-                index_counter += 1
-                y, x = divmod(chosen_index, width)
-
-                if aggregation_amount > 0 and particle_locations:
-                    aggregation_factor = aggregation_amount / 11.0
-                    clump_center = clump_centers[np.random.choice(len(clump_centers))]
-                    shift_x = int((clump_center[0] - x) * aggregation_factor)
-                    shift_y = int((clump_center[1] - y) * aggregation_factor)
-                    # To make it so clumps aren't universal attractors, only update the particle location if
-                    # aggregation_factor is less than a random number (ie. use this as a probability of changing)
-                    if random.random() <= aggregation_factor:
-                        new_particle_location = (x + shift_x, y + shift_y)
-                    else:
-                        new_particle_location = (x, y)
-                else:
-                    new_particle_location = (x, y)
-
-                # Check if the new location is within borders and far enough from other particles
-                if border_distance <= x <= width - border_distance and border_distance <= y <= height - border_distance and is_far_enough(new_particle_location, particle_locations, half_small_image_width, allow_overlap):
-                    particle_locations.append(new_particle_location)
-                    attempts = 0  # Reset attempts counter after successful addition
-                else:
-                    attempts += 1  # Increment attempts counter if addition is unsuccessful
-
-    if non_random_dist_type == 'micrograph':
-        # This will make a non-linear gradient from the probability map (ice thickness gradient) that will scale the ice thickness +-20% from the given value
-        # 1 - prob_map because particles should be scaled to be darker in thinner areas and lighter in thinner areas
-        inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))
-        return particle_locations, inverse_normalized_prob_map
+            # Generate the inverse normalized probability map for output
+            inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))
+        else:
+            raise ValueError(f"Unknown non-random distribution type: {non_random_dist_type}")
     else:
-        return particle_locations, None
+        raise ValueError(f"Unknown distribution type: {dist_type}")
+
+    # Step 3: Filter candidate positions that are outside the valid area (considering borders)
+    valid_candidates = []
+    for idx, (x, y) in enumerate(candidate_positions):
+        # Check if the position is within the image bounds
+        if x < 0 or x >= width or y < 0 or y >= height:
+            continue
+
+        # Check border distance for each structure based on the largest half_small_image_width
+        max_hsw = max(half_small_image_widths)
+        border_dist = max(border_distance, max_hsw) if no_edge_particles else 0
+        if x < border_dist or x > width - border_dist or y < border_dist or y > height - border_dist:
+            continue
+
+        valid_candidates.append((x, y))
+
+    # Step 4: If overlaps are not allowed, use KDTree to filter out overlapping particles
+    if not allow_overlap:
+        # Start placing particles, checking for overlaps as we go
+        particle_counts = [0] * len(num_particles_per_structure)
+        structure_indices = list(range(len(num_particles_per_structure)))
+        structure_allocations = []
+
+        # Build a KDTree for efficient overlap checking
+        placed_positions = []
+        total_required_particles = sum(num_particles_per_structure)
+        candidate_idx = 0
+
+        while len(placed_positions) < total_required_particles and candidate_idx < len(valid_candidates):
+            x, y = valid_candidates[candidate_idx]
+
+            # Check overlap with existing particles
+            if placed_positions:
+                tree = KDTree(placed_positions)
+                distances, _ = tree.query([(x, y)], k=1)
+                min_distance = min(half_small_image_widths) * 0.9  # Adjust the factor as needed
+                if distances[0] < min_distance:
+                    candidate_idx +=1
+                    continue  # Overlaps with existing particle
+
+            # Assign particle to structures in round-robin fashion based on remaining counts
+            for s_idx in structure_indices:
+                if particle_counts[s_idx] < num_particles_per_structure[s_idx]:
+                    all_particle_locations[s_idx].append((x, y))
+                    particle_counts[s_idx] += 1
+                    placed_positions.append((x, y))
+                    break
+            candidate_idx +=1
+
+        # Update the total placed particles
+        placed_particles = sum(particle_counts)
+
+    else:
+        # If overlaps are allowed, distribute positions to structures
+        # Round-robin assignment to structures
+        candidate_idx = 0
+        particle_counts = [0] * len(num_particles_per_structure)
+        total_required_particles = sum(num_particles_per_structure)
+        while candidate_idx < len(valid_candidates) and sum(particle_counts) < total_required_particles:
+            for s_idx in range(len(num_particles_per_structure)):
+                if particle_counts[s_idx] < num_particles_per_structure[s_idx]:
+                    all_particle_locations[s_idx].append(valid_candidates[candidate_idx])
+                    particle_counts[s_idx] += 1
+                    candidate_idx +=1
+                    if candidate_idx >= len(valid_candidates):
+                        break
+
+    if dist_type == 'non_random' and non_random_dist_type == 'micrograph':
+        return all_particle_locations, inverse_normalized_prob_map
+    else:
+        return all_particle_locations, None
 
 def estimate_noise_parameters(image):
     """
@@ -2917,9 +2983,6 @@ def filter_out_overlapping_particles(particle_locations, half_small_image_width)
     """
     print_and_log("", logging.DEBUG)
 
-    # Use scipy.spatial.KDTree for efficient nearest-neighbor search
-    from scipy.spatial import KDTree
-
     # Build a KDTree for the particle locations
     tree = KDTree(particle_locations)
 
@@ -3005,8 +3068,8 @@ def create_collage(large_image, small_images, particle_locations, gaussian_varia
 def blend_images(input_options, particle_and_micrograph_generation_options, simulation_options, 
                  junk_labels_options, output_options, context, defocus):
     """
-    Blend small images (particles) into a large image (micrograph).
-    Also makes coordinate files.
+    Blend small images (particles) from multiple structures into a large image (micrograph).
+    Also performs junk filtering, edge filtering, and generates coordinate files.
 
     :param dict input_options: Dictionary of input options, including large_image, small_images, etc.
     :param dict particle_and_micrograph_generation_options: Dictionary of particle and micrograph generation options.
@@ -3018,13 +3081,14 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     :return tuple: The blended large image, and the filtered particle locations.
     """
     print_and_log("", logging.DEBUG)
+
     # Extract input options
     large_image = input_options['large_image']
-    small_images = input_options['small_images']
-    particle_locations = input_options['particle_locations']
-    orientations = input_options['orientations']
-    structure_name = input_options['structure_name']
-    output_path = output_options['output_path']
+    all_small_images = input_options['small_images']  # A list of small images for all structures
+    all_particle_locations = input_options['particle_locations']  # A list of particle locations for all structures
+    all_orientations = input_options['orientations']  # A list of orientations for all structures
+    structure_names = input_options['structure_names']  # A list of structure names
+    output_paths = output_options['output_paths']  # Output paths for each structure
 
     # Extract junk labels options
     no_junk_filter = junk_labels_options['no_junk_filter']
@@ -3033,91 +3097,125 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     json_scale = junk_labels_options['json_scale']
     polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
 
-    # Junk Filtering
+    # Initialize filtered particle locations for all structures
+    filtered_all_particle_locations = []
+
+    # Step 1: Junk Filtering
     json_file_path = os.path.splitext(input_options['large_image_path'])[0] + ".json"
-    if not no_junk_filter:
-        if os.path.exists(json_file_path):
-            polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
-            # Remove particle locations from inside polygons (junk in micrographs) when writing coordinate files
-            filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
-            num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s) based on the JSON file.")
+    for i, structure_name in enumerate(structure_names):
+        particle_locations = all_particle_locations[i]
+
+        if not no_junk_filter:
+            if os.path.exists(json_file_path):
+                polygons = read_polygons_from_json(json_file_path, polygon_expansion_distance, flip_x, flip_y, expand=True)
+                filtered_particle_locations = filter_coordinates_outside_polygons(particle_locations, json_scale, polygons)
+                num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
+                print_and_log(f"{context} {num_particles_removed} obscured particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} based on the JSON file.")
+            else:
+                print_and_log(f"{context} No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
+                filtered_particle_locations = particle_locations
         else:
-            print_and_log(f"{context} No JSON file found for bad micrograph areas: {json_file_path}", logging.WARNING)
+            print_and_log(f"{context} Skipping junk filtering for {structure_name} (i.e., not using JSON file)")
             filtered_particle_locations = particle_locations
-    else:
-        print_and_log(f"{context} Skipping junk filtering for {structure_name} (i.e., not using JSON file)")
-        filtered_particle_locations = particle_locations
 
-    # Edge Particle Filtering
-    if not particle_and_micrograph_generation_options['save_edge_coordinates']:
+        filtered_all_particle_locations.append(filtered_particle_locations)
+
+    # Step 2: Edge Particle Filtering
+    final_particle_locations = []
+    for i, filtered_particle_locations in enumerate(filtered_all_particle_locations):
         remaining_particle_locations = filtered_particle_locations[:]
-        for x, y in filtered_particle_locations:
-            reduced_sidelength = int(np.ceil(input_options['half_small_image_width'] * 100 / (100 + particle_and_micrograph_generation_options['scale_percent'])))
-            left_edge = x - reduced_sidelength
-            right_edge = x + reduced_sidelength
-            top_edge = y - reduced_sidelength
-            bottom_edge = y + reduced_sidelength
+        structure_name = structure_names[i]
+        half_small_image_width = input_options['half_small_image_widths'][i]  # Handle different sizes for each structure
 
-            # Determine if the particle is too close to any edge of the large image
-            if (left_edge < particle_and_micrograph_generation_options['border_distance'] or 
-                right_edge > large_image.shape[1] - particle_and_micrograph_generation_options['border_distance'] or
-                top_edge < particle_and_micrograph_generation_options['border_distance'] or 
-                bottom_edge > large_image.shape[0] - particle_and_micrograph_generation_options['border_distance']):
-                remaining_particle_locations.remove((x, y))
+        if not particle_and_micrograph_generation_options['save_edge_coordinates']:
+            for x, y in filtered_particle_locations:
+                reduced_sidelength = int(np.ceil(half_small_image_width * 100 / (100 + particle_and_micrograph_generation_options['scale_percent'])))
+                left_edge = x - reduced_sidelength
+                right_edge = x + reduced_sidelength
+                top_edge = y - reduced_sidelength
+                bottom_edge = y + reduced_sidelength
 
-        num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
-        if num_particles_removed > 0:
-            print_and_log(f"{context} {num_particles_removed} particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s) due to being too close to the edge.")
+                # Determine if the particle is too close to any edge of the large image
+                if (left_edge < particle_and_micrograph_generation_options['border_distance'] or 
+                    right_edge > large_image.shape[1] - particle_and_micrograph_generation_options['border_distance'] or
+                    top_edge < particle_and_micrograph_generation_options['border_distance'] or 
+                    bottom_edge > large_image.shape[0] - particle_and_micrograph_generation_options['border_distance']):
+                    remaining_particle_locations.remove((x, y))
+
+            num_particles_removed = len(filtered_particle_locations) - len(remaining_particle_locations)
+            if num_particles_removed > 0:
+                print_and_log(f"{context} {num_particles_removed} edge particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name}.")
+            else:
+                print_and_log(f"{context} 0 edge particles removed for {structure_name}.")
+        final_particle_locations.append(remaining_particle_locations)
+
+    # Step 3: Overlapping Particle Filtering (for Coordinate Files)
+    final_filtered_particle_locations = []
+    for i, particle_locations in enumerate(final_particle_locations):
+        if not particle_and_micrograph_generation_options['save_overlapping_coords']:
+            half_small_image_width = input_options['half_small_image_widths'][i]
+            filtered_particle_locations = filter_out_overlapping_particles(particle_locations, half_small_image_width)
+            num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
+            if num_particles_removed > 0:
+                print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed for {structure_names[i]}.")
+            else:
+                print_and_log(f"{context} 0 overlapping particles removed for {structure_names[i]}.")
         else:
-            print_and_log(f"{context} 0 particles removed for {structure_name} from coordinate file(s) due to being too close to the edge.")
-        filtered_particle_locations = remaining_particle_locations
+            filtered_particle_locations = particle_locations
 
-    # Overlapping Particle Filtering - for Coordinate Files only
-    if not particle_and_micrograph_generation_options['save_overlapping_coords']:
-        filtered_particle_locations = filter_out_overlapping_particles(filtered_particle_locations, input_options['half_small_image_width'])
-        num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
-        if num_particles_removed > 0:
-            print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed for {structure_name} from coordinate file(s).")
-        else:
-            print_and_log(f"{context} 0 particles removed for {structure_name} from coordinate file(s) due to overlapping.")
+        final_filtered_particle_locations.append(filtered_particle_locations)
 
-    # Ensure small_images and particle_locations are the same length
-    if len(small_images) > len(particle_locations):
-        small_images = small_images[:len(particle_locations)]
+    # Step 4: Ensure that small_images and particle_locations match in length
+    for i in range(len(all_small_images)):
+        if len(all_small_images[i]) > len(all_particle_locations[i]):
+            all_small_images[i] = all_small_images[i][:len(all_particle_locations[i])]
 
-    # Normalize the input micrograph to itself
+    # Step 5: Normalize the input micrograph to itself
     large_image[:, :] = (large_image[:, :] - large_image[:, :].mean()) / large_image[:, :].std()
 
-    # Create the collage of particles on the micrograph
-    collage = create_collage(large_image, small_images, particle_locations, 
-                             particle_and_micrograph_generation_options['gaussian_variance'])
+    # Step 6: Create the collage of particles on the micrograph for all structures
+    for i in range(len(all_small_images)):
+        collage = create_collage(large_image, all_small_images[i], all_particle_locations[i], 
+                                 particle_and_micrograph_generation_options['gaussian_variance'])
 
-    # If a probability map is provided, adjust the collage based on local ice thickness
-    if 'prob_map' in input_options and input_options['prob_map'] is not None:
-        collage *= simulation_options['scale'] * input_options['prob_map']
-    else:
-        collage *= simulation_options['scale']
+        # If a probability map is provided, adjust the collage based on local ice thickness
+        if 'prob_map' in input_options and input_options['prob_map'] is not None:
+            collage *= simulation_options['scale'] * input_options['prob_map']
+        else:
+            collage *= simulation_options['scale']
 
-    # Blend the collage with the large image
-    blended_image = large_image + collage
+        # Blend the collage with the large image
+        large_image = large_image + collage
 
-    # Normalize the resulting micrograph to itself
-    blended_image = (blended_image - blended_image.mean()) / blended_image.std()
+    # Step 7: Normalize the resulting micrograph to itself
+    blended_image = (large_image - large_image.mean()) / large_image.std()
 
-    # Combine filtered_particle_locations with orientations for easier passing
-    filtered_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(filtered_particle_locations, orientations)]
+    # Step 8: Combine filtered_particle_locations with orientations for easier passing
+    filtered_particle_locations_with_orientations = []
+    for i, structure_name in enumerate(structure_names):
+        for loc, ori in zip(final_filtered_particle_locations[i], all_orientations[i]):
+            filtered_particle_locations_with_orientations.append((loc, ori))
 
-    # Save particle coordinates to coordinate files
-    save_particle_coordinates(structure_name, filtered_particle_locations_with_orientations, output_path, 
-                              output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus)
+    # Initialize a list to store the number of saved coordinates for each structure
+    num_particles_saved_per_structure = []
 
-    return blended_image, filtered_particle_locations_with_orientations
+    # Step 9: Save particle coordinates to coordinate files (.star, .mod, .coord) for each structure
+    for i, structure_name in enumerate(structure_names):
+        structure_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(final_filtered_particle_locations[i], all_orientations[i])]
+        save_particle_coordinates(structure_name, structure_particle_locations_with_orientations, output_paths[i], output_options['output_file_path'],
+                                  output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus)
+        # Track the number of saved particles for this structure
+        num_particles_saved_per_structure.append(len(structure_particle_locations_with_orientations))
+
+    return blended_image, filtered_particle_locations_with_orientations, num_particles_saved_per_structure
 
 def add_images(input_options, particle_and_micrograph_generation_options, simulation_options, 
                junk_labels_options, output_options, context, defocus):
     """
     Add small images or particles to a large image and save the resulting micrograph.
+
+    This version handles multiple structures per micrograph, combining their projections and particle
+    locations into a single micrograph.
 
     :param dict input_options: Dictionary of input options, including large_image, small_images, etc.
     :param dict particle_and_micrograph_generation_options: Dictionary of particle and micrograph generation options.
@@ -3134,62 +3232,60 @@ def add_images(input_options, particle_and_micrograph_generation_options, simula
 
     # Extract input options
     large_image_path = input_options['large_image_path']
-    large_image = input_options['large_image']
-    small_images = input_options['small_images']
+    all_small_images = input_options['small_images']
+    all_particle_locations = input_options['particle_locations']
+    all_orientations = input_options['orientations']
     pixelsize = input_options['pixelsize']
-    structure_name = input_options['structure_name']
-    orientations = input_options['orientations']
-    output_path = output_options['output_path']
+    structure_names = input_options['structure_names']
+    output_paths = output_options['output_paths']
 
-    # Calculate half the width of a small image
-    half_small_image_width = int(small_images.shape[1] / 2)
+    # Ensure that we have enough small images and particle locations for all structures
+    total_particles = sum([len(p) for p in all_small_images])
 
-    # Extract particle and micrograph generation options
-    scale_percent = particle_and_micrograph_generation_options['scale_percent']
-    dist_type = particle_and_micrograph_generation_options['dist_type']
-    non_random_dist_type = particle_and_micrograph_generation_options['non_random_dist_type']
-    border_distance = particle_and_micrograph_generation_options['border_distance']
-    no_edge_particles = particle_and_micrograph_generation_options['no_edge_particles']
-    save_edge_coordinates = particle_and_micrograph_generation_options['save_edge_coordinates']
-    gaussian_variance = particle_and_micrograph_generation_options['gaussian_variance']
-    aggregation_amount = particle_and_micrograph_generation_options['aggregation_amount']
-    allow_overlap = particle_and_micrograph_generation_options['allow_overlap']
-
-    # Generate particle locations using generate_particle_locations function
-    particle_locations, prob_map = generate_particle_locations(large_image, np.flip(large_image.shape), 
-                                                               len(small_images), half_small_image_width, 
-                                                               border_distance, no_edge_particles, dist_type, 
-                                                               non_random_dist_type, aggregation_amount, allow_overlap)
-
-    # Add changed variables to input_options
-    input_options['prob_map'] = prob_map
-    input_options['particle_locations'] = particle_locations
-    input_options['half_small_image_width'] = half_small_image_width
+    # Initialize the probability map (if micrograph distribution is used)
+    prob_map = input_options.get('prob_map', None)
 
     # Proceed with blending images
-    if len(particle_locations) != len(small_images):
-        print_and_log(f"{context} Only {len(particle_locations)} could fit into the image. Adding those to the micrograph now...")
-    result_image, filtered_particle_locations = blend_images(input_options, particle_and_micrograph_generation_options,
-                                                             simulation_options, junk_labels_options, output_options, context, defocus)
+    particle_count = sum([len(locations) for locations in all_particle_locations])
+
+    # Concatenate all structure names to form the suffix for the output file basename
+    structure_names_combined = "_".join(structure_names)
+
+    # Get the directory and base filename from the first output path
+    output_dir = os.path.dirname(output_paths[0])
+    base_filename = os.path.splitext(os.path.basename(large_image_path))[0]
+
+    # Build the full path using the directory, base filename, and combined structure names
+    output_file_path = os.path.join(output_dir, f"{base_filename}_{structure_names_combined}")
+    output_options['output_file_path'] = output_file_path
+
+    # Blend the images and filter coordinates, then save the output
+    result_image, filtered_particle_locations, num_particles_saved_per_structure = blend_images(
+        input_options, particle_and_micrograph_generation_options,
+        simulation_options, junk_labels_options, output_options, context, defocus
+    )
 
     # Save the resulting micrograph in the specified formats
     if output_options['save_as_mrc']:
-        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.mrc...")
-        writemrc(output_path + '.mrc', (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
-    if output_options['save_as_png']:
-        # Needs to be scaled from 0 to 255 and flipped
-        result_image -= result_image.min()
-        result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.png...")
-        cv2.imwrite(output_path + '.png', np.flip(result_image, axis=0))
-    if output_options['save_as_jpeg']:
-        # Needs to be scaled from 0 to 255 and flipped
-        result_image -= result_image.min()
-        result_image = result_image / result_image.max() * 255.0
-        print_and_log(f"\n{context} Writing synthetic micrograph: {output_path}.jpeg...")
-        cv2.imwrite(output_path + '.jpeg', np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, output_options['jpeg_quality']])
+        print_and_log(f"{context} Writing synthetic micrograph: {output_file_path}.mrc...")
+        write_mrc(f"{output_file_path}.mrc", (result_image - np.mean(result_image)) / np.std(result_image), pixelsize)  # Write normalized mrc (mean = 0, std = 1)
 
-    return len(particle_locations), len(filtered_particle_locations)
+    if output_options['save_as_png']:
+        # Normalize from 0 to 255 and flip the image before saving
+        result_image -= result_image.min()
+        result_image = result_image / result_image.max() * 255.0
+        print_and_log(f"{context} Writing synthetic micrograph: {output_file_path}.png...")
+        cv2.imwrite(f"{output_file_path}.png", np.flip(result_image, axis=0))
+
+    if output_options['save_as_jpeg']:
+        # Normalize from 0 to 255 and flip the image before saving
+        result_image -= result_image.min()
+        result_image = result_image / result_image.max() * 255.0
+        print_and_log(f"{context} Writing synthetic micrograph: {output_file_path}.jpeg...")
+        cv2.imwrite(f"{output_file_path}.jpeg", np.flip(result_image, axis=0), [cv2.IMWRITE_JPEG_QUALITY, output_options['jpeg_quality']])
+
+    # Return total_particles and the list of num_particles_saved_per_structure
+    return total_particles, num_particles_saved_per_structure
 
 def crop_particles_gpu(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id):
     """
@@ -3220,7 +3316,7 @@ def crop_particles_gpu(micrograph_path, particle_rows, particles_dir, box_size, 
 
                 cropped_particle = micrograph_data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
                 particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
-                writemrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
+                write_mrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
                 cropped_count += 1
 
     return cropped_count
@@ -3258,13 +3354,13 @@ def crop_particles_gpu_batch(micrograph_paths, particle_rows_list, particles_dir
 
                     cropped_particle = micrograph_data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
                     particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
-                    writemrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
+                    write_mrc(particle_path, cp.asnumpy(cropped_particle).astype(np.float32), pixelsize)
                     cropped_count += 1
                 total_cropped += cropped_count
 
     return total_cropped
 
-def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles):
+def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, context):
     """
     Crops particles from a single micrograph.
 
@@ -3274,6 +3370,7 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixe
     :param int box_size: The box size in pixels for the cropped particles.
     :param float pixelsize: Pixel size of the micrograph.
     :param int max_crop_particles: The maximum number of particles to crop from the micrograph.
+    :param str context: Context string for print statements.
     :return int: Total number of particles cropped from the micrograph.
 
     This function writes .mrc files to the disk.
@@ -3292,18 +3389,20 @@ def crop_particles(micrograph_path, particle_rows, particles_dir, box_size, pixe
 
             cropped_particle = mrc.data[y-half_box_size:y+half_box_size, x-half_box_size:x+half_box_size]
             particle_path = os.path.join(particles_dir, f"particle_{row['particle_counter']:010d}.mrc")
-            writemrc(particle_path, cropped_particle.astype(np.float32), pixelsize)
+            write_mrc(particle_path, cropped_particle.astype(np.float32), pixelsize)
             cropped_count += 1
 
+    print_and_log(f"{context} Cropped {cropped_count} particles from {micrograph_path}")
     return cropped_count
 
-def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop_particles, num_cpus, use_gpu, gpu_ids):
+def crop_particles_from_micrographs(structure_name, structure_set_name, box_size, pixelsize, max_crop_particles, num_cpus, use_gpu, gpu_ids):
     """
     Crops particles from micrographs based on coordinates specified in a micrograph STAR file
     and saves them with a specified box size. This function operates in parallel, using multiple GPUs
     or multiple CPU cores to process different micrographs concurrently.
 
-    :param str structure_dir: The directory containing the structure's micrographs and STAR file.
+    :param str structure_name: The structure name.
+    :param str structure_set_name: The directory containing the current structure set.
     :param int box_size: The box size in pixels for the cropped particles. If None, the function
                          will dynamically determine the box size from the .mrc map used for projections.
     :param float pixelsize: Pixel size of the micrographs.
@@ -3316,15 +3415,17 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
     Notes:
     - Particles whose specified box would extend beyond the micrograph boundaries are not cropped.
     - This function assumes the presence of a STAR file in the structure directory with the naming
-      convention of '{structure_name}.star' or {structure_dir}/{structure_dir}.star containing the
+      convention of '{structure_name}.star' or {structure_set_name}/{structure_name}.star containing the
       necessary coordinates for cropping.
     """
     print_and_log("", logging.DEBUG)
-    print_and_log(f"\n[{structure_dir}] Cropping particles...\n")
-    particles_dir = os.path.join(structure_dir, 'Particles/')
+    structure_set_number = int(structure_set_name.split('_')[-1])
+    context = f"[SS #{structure_set_number} | {structure_name}]"
+    print_and_log(f"{context} Cropping particles...")
+    particles_dir = os.path.join(structure_set_name, f'Particles_{structure_name}/')
     os.makedirs(particles_dir, exist_ok=True)
 
-    star_file_path = next((path for path in [f'{structure_dir}/{structure_dir}.star', f'{structure_dir}.star'] if os.path.isfile(path)), None)  # Hack to get around a bug where the star file is either in the base directory or structure directory.
+    star_file_path = next((path for path in [f'{structure_set_name}/{structure_name}.star', f'{structure_name}.star'] if os.path.isfile(path)), None)  # Hack to get around a bug where the star file is either in the base directory or structure directory.
     df = read_star_particles(star_file_path)
     df['particle_counter'] = range(1, len(df) + 1)
 
@@ -3354,9 +3455,9 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
                         particle_rows = grouped_df.get_group(micrograph_name)
                         micrograph_path = os.path.join(micrograph_name)
                         if not os.path.exists(micrograph_path):
-                            print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
+                            print_and_log(f"{context} Micrograph not found: {micrograph_path}", logging.WARNING)
                             continue
-                        print_and_log(f"[{structure_dir}] Extracting {len(particle_rows)} particles for {micrograph_name}...")
+                        print_and_log(f"{context} Extracting {len(particle_rows)} {structure_name} particles for {micrograph_name}...", logging.DEBUG)
                         batch_paths.append(micrograph_path)
                         batch_particle_rows.append(particle_rows)
                     total_cropped += crop_particles_gpu_batch(batch_paths, batch_particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, gpu_id)
@@ -3369,11 +3470,11 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
             for micrograph_name, particle_rows in grouped_df:
                 micrograph_path = os.path.join(micrograph_name)
                 if not os.path.exists(micrograph_path):
-                    print_and_log(f"Micrograph not found: {micrograph_path}", logging.WARNING)
+                    print_and_log(f"{context} Micrograph not found: {micrograph_path}", logging.WARNING)
                     continue
 
-                print_and_log(f"[{structure_dir}] Extracting {len(particle_rows)} particles for {micrograph_name}...")
-                future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles)
+                print_and_log(f"{context} Extracting {len(particle_rows)} {structure_name} particles for {micrograph_name}...", logging.DEBUG)
+                future = executor.submit(crop_particles, micrograph_path, particle_rows, particles_dir, box_size, pixelsize, max_crop_particles, context)
                 futures.append(future)
 
             for future in futures:
@@ -3381,40 +3482,40 @@ def crop_particles_from_micrographs(structure_dir, box_size, pixelsize, max_crop
 
     return total_cropped
 
-def process_single_micrograph(args, structure_name, structure, line, total_structures, structure_index,
-                              micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts, micrograph_number):
+def process_single_micrograph(args, structures, line, total_structures, structure_index,
+                              micrograph_usage_count, remaining_aggregation_amounts, micrograph_number, structure_set_name):
     """
-    Process a single micrograph for a given structure.
+    Process a single micrograph for a set of structures.
 
     :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
-    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
-    :param numpy_array structure: The 3D numpy array of the structure.
+    :param list structures: List of tuples, each containing (structure_name, structure, mass, ice_scaling_fudge_factor).
     :param str line: The line containing the micrograph name and defocus value.
-    :param int total_structures: Total number of structures requested.
-    :param int structure_index: Index of the current structure.
+    :param int total_structures: Total number of structure sets requested.
+    :param int structure_index: Index of the current structure set.
     :param dict micrograph_usage_count: Dictionary to keep track of the usage count of each unique micrograph.
-    :param float ice_scaling_fudge_factor: Fudge factor for making particles look dark enough.
     :param list remaining_aggregation_amounts: List to track remaining aggregation amounts.
     :param int micrograph_number: Current micrograph number (1-indexed).
-    :return int int: Number of particles projected, number of particles with saved coordinates.
+    :param str structure_set_name: The name of the directory for this structure set.
+    :return tuple: Number of particles projected, number of particles with saved coordinates.
     """
     print_and_log("", logging.DEBUG)
+
     # Parse the 'micrograph_name.mrc defocus' line
     fname, defocus = line.strip().split()[:2]
     fname = os.path.splitext(os.path.basename(fname))[0]
-    micrograph = readmrc(f"{args.image_directory}/{fname}.mrc")
-    
+    micrograph = read_mrc(f"{args.image_directory}/{fname}.mrc")
+    mean, gaussian_variance = estimate_noise_parameters(micrograph)
+
     # Track each micrograph's usage count for naming purposes
     micrograph_usage_count[fname] = micrograph_usage_count.get(fname, 0) + 1
     # Generate the repeat number suffix for the filename
     repeat_suffix = f"_{micrograph_usage_count[fname]}" if micrograph_usage_count[fname] > 1 else ""
 
     # Add context for printout
-    context = f"[{structure_name} | {micrograph_number}/{args.num_images}]"
-
-    num_hyphens = '-' * (55 + len(f"{structure_index + 1}{total_structures}{structure_name}{fname}"))
+    context = f"[SS #{structure_index + 1} | {micrograph_number}/{args.num_images}]"
+    num_hyphens = '-' * (57 + len(f"{structure_index + 1}{total_structures}{fname}"))
     print_and_log(f"\n\033[1m{num_hyphens}\033[0m", logging.WARNING)
-    print_and_log(f"Generating synthetic micrograph #{micrograph_number} using {structure_name} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
+    print_and_log(f"Generating synthetic micrograph #{micrograph_number} for SS #{structure_index + 1} ({structure_index + 1}/{total_structures}) from {fname}...", logging.WARNING)
     print_and_log(f"\033[1m{num_hyphens}\033[0m\n", logging.WARNING)
 
     # Determine if overlap is allowed for this micrograph
@@ -3422,38 +3523,97 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         args.allow_overlap = bool(random.getrandbits(1))
     print_and_log(f"{context} {'Allowing' if args.allow_overlap else 'Not allowing'} overlapping particles for this micrograph.")
 
-    # Determine ice and particle behavior parameters
-    ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
-        args, structure, structure_name, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context)
+    # Initialize aggregation amounts for this micrograph
+    remaining_aggregation_amounts = list(remaining_aggregation_amounts)
 
-    # Generate projections with the specified orientation mode
-    print_and_log(f"{context} Projecting the structure volume ({structure_name}) {num_particles} times...")
-    particles, orientations = generate_projections(structure, num_particles, args.orientation_mode, args.preferred_angles,
-                                                   args.angle_variation, args.preferred_weight, args.cpus, args.use_gpu, args.gpu_ids)
+    # Initialize totals for this micrograph
+    total_num_particles_projected = 0
+    total_num_particles_with_saved_coordinates = 0
 
-    print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frame{'s' if args.num_simulated_particle_frames != 1 else ''}...")
-    mean, gaussian_variance = estimate_noise_parameters(micrograph)
-    if args.use_gpu:
-        noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
-                                                args.dose_c, args.apix, args.gpu_ids)
-    else:
-        noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
-                                            args.dose_c, args.apix, args.cpus)
+    # Initialize lists to store combined particles, locations, and orientations for all structures
+    all_particle_locations = []
+    all_orientations = []
+    all_particles = []  # Will hold the processed particle stacks for each structure
+    half_small_image_widths = []
+    num_particles_per_structure = []
 
-    print_and_log(f"{context} Applying CTF based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
-    noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor,
-                                                args.apix, args.Cs, args.voltage, args.cpus)
+    # Step 1: Loop over each structure to determine maximum number of particles and other relevant parameters
+    for structure_name, structure, mass, ice_scaling_fudge_factor in structures:
+        # Determine ice and particle behavior parameters for each structure
+        ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
+            args, structure, structure_name, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context
+        )
 
-    print_and_log(f"{context} Adding {num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
+        # Store the number of particles for this structure
+        num_particles_per_structure.append(num_particles)
+        # Store half the width of the small image for each structure (used in generating locations)
+        half_small_image_widths.append(structure.shape[0] // 2)
 
-    # Make dictionaries of parameters to pass to make it easy to add/change parameters with continued development
+    # Step 2: Generate particle locations for all structures using round-robin placement
+    particle_locations, prob_map = generate_particle_locations(
+        micrograph_image=micrograph,
+        image_size=micrograph.shape,
+        num_particles_per_structure=num_particles_per_structure,
+        half_small_image_widths=half_small_image_widths,
+        border_distance=args.border,
+        no_edge_particles=args.no_edge_particles,
+        dist_type=dist_type,
+        non_random_dist_type=non_random_dist_type,
+        aggregation_amount=aggregation_amount_val,
+        allow_overlap=args.allow_overlap
+    )
+
+    # Step 3: Loop over each structure again to generate projections, add noise, and apply CTF
+    for idx, (structure_name, structure, mass, ice_scaling_fudge_factor) in enumerate(structures):
+        print_and_log(f"{context} Projecting the structure volume ({structure_name}) {num_particles_per_structure[idx]} times...")
+
+        # Generate projections with the specified orientation mode for the current structure
+        particles, orientations = generate_projections(
+            structure, 
+            num_particles_per_structure[idx], 
+            args.orientation_mode, 
+            args.preferred_angles,
+            args.angle_variation, 
+            args.preferred_weight, 
+            args.cpus, 
+            args.use_gpu, 
+            args.gpu_ids
+        )
+
+        # Store projections, orientations, and particle locations for this structure
+        all_orientations.append(orientations)
+        all_particle_locations.append(particle_locations[idx])  # Keep particle locations separated for each structure
+
+        # Step 4: Simulate noise, damage, and apply CTF to this structure's particles
+        print_and_log(f"{context} Simulating pixel-level Poisson noise{f' and dose damage' if args.dose_damage != 'None' else ''} across {args.num_simulated_particle_frames} particle frame{'s' if args.num_simulated_particle_frames != 1 else ''} for {structure_name}...")
+        if args.use_gpu:
+            noisy_particles = add_poisson_noise_gpu(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
+                                                    args.dose_c, args.apix, args.gpu_ids)
+        else:
+            noisy_particles = add_poisson_noise(particles, args.num_simulated_particle_frames, args.dose_a, args.dose_b,
+                                                args.dose_c, args.apix, args.cpus)
+
+        # Apply CTF to the noisy particles
+        print_and_log(f"{context} Applying CTF to {structure_name} based on defocus ({float(defocus):.4f} microns) and microscope parameters ({args.voltage} keV, AmpCont: {args.ampcont}%, Cs: {args.Cs} mm, Pixelsize: {args.apix} Angstroms) of the ice micrograph...")
+        noisy_particles_CTF = apply_ctfs_with_eman2(noisy_particles, [defocus] * len(noisy_particles), args.ampcont, args.bfactor,
+                                                    args.apix, args.Cs, args.voltage, args.cpus)
+
+        # Store the noisy particles for this structure
+        all_particles.append(noisy_particles_CTF)
+
+    structure_results = []
+
+    # Step 5: Blend all particles into the micrograph and save coordinates
+    print_and_log(f"{context} Adding {len(all_particles) * num_particles} particles to the micrograph{f' {dist_type}ly ({non_random_dist_type})' if dist_type == 'non_random' else f' {dist_type}ly' if dist_type else ''}{f' with aggregation amount of {aggregation_amount_val:.1f}' if args.distribution in ('m','micrograph') else ''} while adding Gaussian (white) noise and simulating a average relative ice thickness of {ice_thickness_printout:.1f} nm...")
     input_options = {
         'large_image_path': f"{args.image_directory}/{fname}.mrc",
         'large_image': micrograph,
-        'small_images': noisy_particles_CTF,
+        'small_images': all_particles,  # Pass the processed noisy particles for all structures
         'pixelsize': args.apix,
-        'structure_name': structure_name,
-        'orientations': orientations
+        'structure_names': [structure[0] for structure in structures],  # Names of the structures
+        'orientations': all_orientations,
+        'particle_locations': all_particle_locations,
+        'half_small_image_widths': half_small_image_widths
     }
     particle_and_micrograph_generation_options = {
         'scale_percent': args.scale_percent,
@@ -3475,6 +3635,8 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         'json_scale': args.json_scale,
         'polygon_expansion_distance': args.polygon_expansion_distance
     }
+
+    # Use the structure_set_name for output paths to ensure consistency with generate_micrographs
     output_options = {
         'save_as_mrc': args.mrc,
         'save_as_png': args.png,
@@ -3482,197 +3644,334 @@ def process_single_micrograph(args, structure_name, structure, line, total_struc
         'jpeg_quality': args.jpeg_quality,
         'imod_coordinate_file': args.imod_coordinate_file,
         'coord_coordinate_file': args.coord_coordinate_file,
-        'output_path': f"{structure_name}/{fname}_{structure_name}{repeat_suffix}"
+        'output_paths': [f"{structure_set_name}/{fname}_{structure[0]}{repeat_suffix}" for structure in structures]
     }
 
-    num_particles_projected, num_particles_with_saved_coordinates = add_images(
-    input_options, particle_and_micrograph_generation_options,
-    simulation_options, junk_labels_options, output_options, context, defocus)
+    num_particles_projected, num_particles_saved_per_structure = add_images(
+        input_options, particle_and_micrograph_generation_options,
+        simulation_options, junk_labels_options, output_options, context, defocus
+    )
 
-    return num_particles_projected, num_particles_with_saved_coordinates
+    # Distribute the particles among the structures
+    num_structures = len(structures)
+    particles_per_structure = num_particles_projected // num_structures
 
-def generate_micrographs(args, structure_name, structure_type, structure_index, total_structures):
+    structure_results = []
+    for idx, structure in enumerate(structures):
+        structure_name = structure[0]
+        # Assign any remaining particles to the last structure
+        if idx == num_structures - 1:
+            structure_projected = num_particles_projected - (particles_per_structure * (num_structures - 1))
+        else:
+            structure_projected = particles_per_structure
+        # Use the actual number of saved particles for this structure from `num_particles_saved_per_structure`
+        structure_saved = num_particles_saved_per_structure[idx]
+        structure_results.append((structure_name, structure_projected, structure_saved))
+
+    return structure_results
+
+def process_single_structure(sub_structure_input, args):
     """
-    Generate synthetic micrographs for a specified structure.
+    Process a single structure: download, convert, and estimate mass.
+
+    :param str sub_structure_input: The input structure (PDB ID, MRC file, etc.).
+    :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
+    :return tuple: The structure name, structure data, mass, and ice scaling fudge factor.
+    """
+    result = process_structure_input(sub_structure_input, args.max_emdb_size, args.std_threshold, args.apix)
+    if result:
+        structure_name, structure_type = result
+        if structure_type == "pdb":
+            mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
+            structure = reorient_mrc(f'{structure_name}.mrc')
+            print_and_log(f"[{structure_name}] Reoriented MRC")
+            print_and_log(f"[{structure_name}] Mass of PDB: {mass} kDa")
+            ice_scaling_fudge_factor = 4.8  # Larger number = darker particles
+        elif structure_type == "mrc":
+            mass = int(estimate_mass_from_map(structure_name))
+            if args.reorient_mrc:
+                structure = reorient_mrc(f'{structure_name}.mrc')  # Reorient if requested
+                print_and_log(f"[{structure_name}] Reoriented MRC")
+            else:
+                structure = read_mrc(f'{structure_name}.mrc')
+            print_and_log(f"[{structure_name}] Estimated mass of MRC: {mass} kDa")
+            ice_scaling_fudge_factor = 2.9
+
+        return structure_name, structure, mass, ice_scaling_fudge_factor
+    return None
+
+def generate_micrographs(args, structure_set, structure_set_index, total_structure_sets):
+    """
+    Generate synthetic micrographs for a specified set of structures.
 
     This function orchestrates the workflow for generating synthetic micrographs
-    for a given structure. It performs file download, conversion, image shuffling,
+    for a set of structures. It performs file download, conversion, image shuffling,
     and iterates through the generation process for each selected image. It also
     handles cleanup operations post-generation.
 
     :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
-    :param str structure_name: The structure name from which synthetic micrographs are to be generated.
-    :param str structure_type: Whether the structure is a pdb or mrc.
-    :param str structure_index: The index of the structure that micrographs are being generated from.
-    :param str total_structures: The total number of structures requested.
+    :param list structure_set: List of structures to be projected onto the micrographs.
+    :param int structure_set_index: The index of the current structure set.
+    :param int total_structure_sets: The total number of structure sets requested.
 
-    :return int int: Total number of particles actually added to all micrographs, and box size of the projected volume.
-
-    This function writes .mrc and .txt files to the disk and deletes several files during cleanup.
+    :return int, int, list: Total number of particles projected, total number of particles saved to coordinate files, and list of box sizes for each structure.
     """
     print_and_log("", logging.DEBUG)
-    os.makedirs(structure_name, exist_ok=True)  # Create output directory
 
-    # Convert PDB to MRC for PDBs and return the mass or estimate the mass of the MRC
-    if structure_type == "pdb":
-        mass = convert_pdb_to_mrc(structure_name, args.apix, args.pdb_to_mrc_resolution)
-        structure = reorient_mrc(f'{structure_name}.mrc')
-        print_and_log(f"[{structure_name}] Reoriented MRC")
-        print_and_log(f"[{structure_name}] Mass of PDB: {mass} kDa")
-        ice_scaling_fudge_factor = 4.8  # Note: larger number = darker particles
-    elif structure_type == "mrc":
-        mass = int(estimate_mass_from_map(structure_name))
-        if args.reorient_mrc:
-            structure = reorient_mrc(f'{structure_name}.mrc')  # It's very slow for EMDB maps...
-            print_and_log(f"[{structure_name}] Reoriented MRC")
-        else:
-            structure = readmrc(f'{structure_name}.mrc')
-        print_and_log(f"[{structure_name}] Estimated mass of MRC: {mass} kDa")
-        ice_scaling_fudge_factor = 2.9
+    # Create a new directory for this structure set (e.g., structure_set_1, structure_set_2)
+    structure_set_name = f"structure_set_{structure_set_index + 1}"
+    context = f"[SS #{structure_set_index + 1}]"
+    os.makedirs(structure_set_name, exist_ok=True)
 
-    # Write STAR header for the current synthetic dataset
-    write_star_header(structure_name, args.apix, args.voltage, args.Cs)
-
-    # Shuffle and possibly extend the ice images
-    print_and_log(f"[{structure_name}] Selecting {args.num_images} random ice micrographs...")
-    selected_images = extend_and_shuffle_image_list(args.num_images, args.image_list_file)
-
-    # Main Loop
     total_num_particles_projected = 0
     total_num_particles_with_saved_coordinates = 0
     micrograph_usage_count = {}  # Dictionary to keep track of repeating micrograph names if the image list was extended
     remaining_aggregation_amounts = list()
 
-    # Check if parallelization is requested
+    # Store the box sizes for each structure
+    box_sizes = []
+
+    # Process and download structures, convert PDBs, and estimate masses
+    structures = []
+
+    # Iterate over the structure_set, which may contain single structures or multiple structures
+    tasks = []  # List to hold tasks for parallel processing
+    with ProcessPoolExecutor(max_workers=args.cpus) as executor:
+        for structure_input in structure_set:
+            if isinstance(structure_input, list):
+                # Handle multiple structures per micrograph (list of lists)
+                for sub_structure_input in structure_input:
+                    tasks.append(executor.submit(process_single_structure, sub_structure_input, args))
+            else:
+                # Handle single structure per micrograph
+                tasks.append(executor.submit(process_single_structure, structure_input, args))
+
+        # Collect the results from parallel tasks
+        for future in tasks:
+            result = future.result()
+            if result:
+                structure_name, structure, mass, ice_scaling_fudge_factor = result
+                structures.append((structure_name, structure, mass, ice_scaling_fudge_factor))
+                box_sizes.append(structure.shape[0])  # Store box size for this structure
+
+    # Write STAR headers for each structure
+    for structure_name, _, _, _ in structures:
+        write_star_header(structure_name, args.apix, args.voltage, args.Cs)
+
+    def format_structure_list(structure_set):
+        """
+        Format the structure set into a flattened list of structure names for printing.
+
+        :param list structure_set: A list of structures, which can contain single or multiple structures.
+        :return list: A list of structure names as strings for printing.
+        """
+        formatted_list = []
+        # Iterate over the structure_set, which may contain single structures or multiple structures
+        for structure_input in structure_set:
+            if isinstance(structure_input, list):
+                # Handle multiple structures per micrograph (list of lists)
+                formatted_list.extend([str(sub_structure) for sub_structure in structure_input])
+            else:
+                # Handle single structure per micrograph
+                formatted_list.append(str(structure_input))
+        return formatted_list
+
+    # Shuffle and possibly extend the ice images
+    formatted_structure_list = format_structure_list(structure_set)
+    print_and_log(f"{context} Selecting {args.num_images} random ice micrographs for Structure Set (SS): {', '.join(formatted_structure_list)}...")
+    selected_images = extend_and_shuffle_image_list(args.num_images, args.image_list_file)
+
+    # Initialize dictionaries to store particle counts for each structure
+    structure_particles_projected = {structure[0]: 0 for structure in structures}
+    structure_particles_saved = {structure[0]: 0 for structure in structures}
+
+    # Main loop for generating micrographs
     if args.parallelize_micrographs > 1:
-        # Use ProcessPoolExecutor to parallelize the micrograph generation
+        # Parallel micrograph generation using ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=args.parallelize_micrographs) as executor:
-            # Create a list to store the future tasks
             futures = []
-            
-            # Iterate over the selected_images
             for i, line in enumerate(selected_images):
-                # Submit each micrograph generation task to the executor
-                future = executor.submit(process_single_micrograph, args, structure_name, structure, line, total_structures,
-                                         structure_index, micrograph_usage_count, ice_scaling_fudge_factor, remaining_aggregation_amounts,
-                                         i + 1)  # Pass the current micrograph number (1-indexed)
+                micrograph_number = i + 1  # Micrograph number (1-indexed)
+                # Submit each micrograph generation task
+                future = executor.submit(
+                    process_single_micrograph, args, structures, line, total_structure_sets,
+                    structure_set_index, micrograph_usage_count, remaining_aggregation_amounts, 
+                    micrograph_number, structure_set_name
+                )
                 futures.append(future)
-            
-            # Iterate over the completed tasks
+
+            # Collect results from parallel tasks
             for future in futures:
                 # Aggregate the results from each task
-                num_particles_projected, num_particles_with_saved_coordinates = future.result()
-                total_num_particles_projected += num_particles_projected
-                total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
+                results = future.result()
+                for structure_name, projected, saved in results:
+                    structure_particles_projected[structure_name] += projected
+                    structure_particles_saved[structure_name] += saved
     else:
-        # If no parallelization is requested, process each micrograph sequentially
+        # Sequential micrograph generation
         for i, line in enumerate(selected_images):
-            num_particles_projected, num_particles_with_saved_coordinates = process_single_micrograph(
-                args, structure_name, structure, line, total_structures, structure_index, micrograph_usage_count,
-                ice_scaling_fudge_factor, remaining_aggregation_amounts, i + 1)  # Pass the current micrograph number (1-indexed)
-            total_num_particles_projected += num_particles_projected
-            total_num_particles_with_saved_coordinates += num_particles_with_saved_coordinates
+            micrograph_number = i + 1  # Micrograph number (1-indexed)
+            results = process_single_micrograph(
+                args, structures, line, total_structure_sets, structure_set_index, 
+                micrograph_usage_count, remaining_aggregation_amounts, micrograph_number, 
+                structure_set_name
+            )
+            for structure_name, projected, saved in results:
+                structure_particles_projected[structure_name] += projected
+                structure_particles_saved[structure_name] += saved
 
-    # Downsample micrographs and coordinate files
+    # Downsample micrographs and coordinate files if requested
     if args.binning > 1:
-        print_and_log(f"[{structure_name}] Binning/Downsampling micrographs by {args.binning} by Fourier cropping...")
-        parallel_downsample_micrographs(f"{structure_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
-        downsample_coordinate_files(structure_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
+        print_and_log(f"{context} Binning/Downsampling micrographs by {args.binning} by Fourier cropping...")
+        parallel_downsample_micrographs(f"{structure_set_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
+        for structure_name, _, _, _ in structures:
+            downsample_coordinate_files(structure_name, structure_set_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
     else:
-        shutil.move(f"{structure_name}.star", f"{structure_name}/")
+        for structure_name, _, _, _ in structures:
+            shutil.move(f"{structure_name}.star", f"{structure_set_name}/")
 
-    # Log structure name, mass, number of micrographs generated, number of particles projected, and number of particles written to coordinate files
+    # Write structure details for each structure in the set
     with open(f"virtualice_{args.script_start_time}_info.txt", "a") as f:
-        # Check if the file is empty
-        if f.tell() == 0:  # Only write the first line if the file is new
-            f.write("structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
+        if f.tell() == 0:  # Only write the header line if the file is new
+            f.write("structure_set_name structure_name mass(kDa) num_images num_particles_projected num_particles_saved\n")
+        for structure_name, _, mass, _ in structures:
+            # Write the correct number of saved particles for each structure
+            f.write(f"{structure_set_name} {structure_name} {mass} {args.num_images} {structure_particles_projected[structure_name]} {structure_particles_saved[structure_name]}\n")
 
-        # Write the subsequent lines
-        f.write(f"{structure_name} {mass} {args.num_images} {total_num_particles_projected} {total_num_particles_with_saved_coordinates}\n")
+    # Return total projections, saved coordinates, list of box sizes, and individual structure counts
+    return structure_particles_projected, structure_particles_saved, box_sizes
 
-    box_size = structure.shape[0]  # Assuming the map is a cube
-
-    return total_num_particles_projected, total_num_particles_with_saved_coordinates, box_size
-
-def clean_up(args, structure_name):
+def clean_up(args, structure_set_name, structure_names):
     """
-    Clean up files at the end of the script.
+    Clean up files at the end of the script for multi-structure micrographs.
 
     :param Namespace args: The argument namespace containing all the user-specified command-line arguments.
-    :param str structure_name: The structure name from which synthetic micrographs were generated.
+    :param str structure_set_name: The name of the structure set directory.
+    :param list structure_names: List of structure names in the current structure set.
 
-    This function deletes several files.
+    This function handles cleaning up .pdb, .mrc, and .star files for each structure in the set.
+    If binning is enabled, it also moves or deletes non-binned files as necessary.
     """
     print_and_log("", logging.DEBUG)
-    if args.binning > 1:
-        if not args.keep:
-            print_and_log(f"[{structure_name}] Removing non-downsamlpled micrographs...")
-            bin_dir = f"{structure_name}/bin_{args.binning}/"
+    print_and_log(f"Cleaning up {structure_set_name}...", logging.DEBUG)
 
-            # Delete the non-downsampled micrographs and coordinate files
-            file_extensions = ["mrc", "png", "jpeg", "mod", "coord"]
-            for ext in file_extensions:
-                for file in glob.glob(f"{structure_name}/*.{ext}"):
-                    os.remove(file)
+    for structure_name in structure_names:
+        # Remove .pdb and .mrc files for each structure
+        for ext in ['.pdb', '.mrc']:
+            file_to_remove = f"{structure_name}{ext}"
+            if os.path.exists(file_to_remove):
+                print_and_log(f"Removing {file_to_remove}", logging.DEBUG)
+                os.remove(file_to_remove)
 
-            # Move the binned files to the parent directory
-            for ext in file_extensions:
-                for file in glob.glob(f"{bin_dir}/*.{ext}"):
-                    shutil.move(file, f"{structure_name}/")
+        # Move .star files from the run directory to the structure set directory
+        star_file = f"{structure_name}.star"
+        if os.path.exists(star_file):
+            print_and_log(f"Moving {star_file} to {structure_set_name}/", logging.DEBUG)
+            shutil.move(star_file, structure_set_name)
 
-            shutil.rmtree(bin_dir)
-            shutil.move(f"{structure_name}_bin{args.binning}.star", f"{structure_name}/")
-            os.remove(f"{structure_name}.star")
-        else:
-            shutil.move(f"{structure_name}.star", f"{structure_name}/")
-            shutil.move(f"{structure_name}_bin{args.binning}.star", f"{structure_name}/bin_{args.binning}/")
+        if args.binning > 1:
+            bin_dir = f"{structure_set_name}/bin_{args.binning}/"
+            star_file = f"{structure_name}_bin{args.binning}.star"
+            if os.path.exists(star_file):
+                print_and_log(f"Moving {star_file} to {bin_dir}/", logging.DEBUG)
+                shutil.move(star_file, bin_dir)
 
-    for directory in [f"{structure_name}/", f"{structure_name}/bin_{args.binning}/"]:
-        try:
-            for file_name in os.listdir(directory):
-                if file_name.endswith(".point"):
-                    file_path = os.path.join(directory, file_name)
+    bin_dir = f"{structure_set_name}/bin_{args.binning}/"
+    # Clean up any remaining .point files in the structure directories
+    for directory in [structure_set_name, bin_dir]:
+        if os.path.exists(directory):
+            for file in os.listdir(directory):
+                if file.endswith('.mod~') or file.endswith('.point'):
+                    os.remove(os.path.join(directory, file))
+
+    # Handle binning
+    if not args.keep:
+        if args.binning > 1:
+            # Move binned files to the structure set directory and remove non-binned files
+            for file in os.listdir(structure_set_name):
+                if file.endswith(f"_bin{args.binning}.star"):
+                    shutil.move(os.path.join(structure_set_name, file), bin_dir)
+                if file.endswith(('.mrc', '.coord', '.mod')) and not file.endswith(f"_bin{args.binning}.mrc"):
+                    os.remove(os.path.join(structure_set_name, file))
+
+            # Move binned files from bin directory to structure set directory
+            for file in os.listdir(bin_dir):
+                if file.endswith(('.mrc', '.coord', '.mod', '.star')):
+                    shutil.move(os.path.join(bin_dir, file), structure_set_name)
+
+            # Remove the bin directory if it's empty
+            if not os.listdir(bin_dir):
+                print_and_log(f"Removing empty bin directory: {bin_dir}", logging.DEBUG)
+                shutil.rmtree(bin_dir)
+
+            star_file = f"{structure_set_name}/*_bin{args.binning}.star"
+            for file_path in glob.glob(star_file):
+                try:
                     os.remove(file_path)
-        except FileNotFoundError:
-            pass
+                except OSError as e:
+                    print_an_log(f"Error removing {file_path}: {e}", logging.WARNING)
 
-    for temp_file in [f"{structure_name}.pdb", f"{structure_name}.map", f"{structure_name}.mrc", "thread.out", ".eman2log.txt"]:
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+    print_and_log(f"Clean-up completed for {structure_set_name}.", logging.DEBUG)
 
-def print_run_information(num_micrographs, structure_names, time_str, total_number_of_particles_projected,
+def print_run_information(num_micrographs, structure_set_names, structure_sets, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, crop_particles,
-                          imod_coordinate_file, coord_coordinate_file, output_directory):
+                          imod_coordinate_file, coord_coordinate_file, binning, keep, output_directory):
     """
     Print run information based on the provided inputs.
 
-    :param int num_micrographs: The number of micrographs.
-    :param list structure_names: List of names of all of the structures.
+    :param int num_micrographs: The total number of micrographs generated.
+    :param list structure_set_names: List of names of all of the structure sets.
+    :param list structure_sets: List of structure sets, each containing structure names.
     :param str time_str: The string representation of the total generation time.
-    :param int total_number_of_particles_projected: The total number of particles projected.
-    :param int total_number_of_particles_with_saved_coordinates: Total number of particles saved to coordinate files.
-    :param int total_cropped_particles: The total number of cropped particles.
+    :param int total_number_of_particles_projected: The total number of particles projected across all structure sets.
+    :param int total_number_of_particles_with_saved_coordinates: Total number of particles saved to coordinate files across all structure sets.
+    :param int total_cropped_particles: The total number of cropped particles across all structure sets.
     :param bool crop_particles: Whether or not particles were cropped.
-    :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
-    :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
+    :param bool imod_coordinate_file: Whether IMOD .mod coordinate files were saved.
+    :param bool coord_coordinate_file: Whether .coord files were saved.
+    :param int binning: Factor by which micrographs were downsampled.
+    :param bool keep: Whether or not unbinned data was kept.
     :param str output_directory: Output directory for all run files.
     """
     print_and_log("", logging.DEBUG)
-    total_structures = len(structure_names)
-    print_and_log(f"\n\n\033[1m{'-' * 100}\n{('VirtualIce Generation Summary').center(100)}\n{'-' * 100}\033[0m", logging.WARNING)
-    print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} from \033[1m{total_structures}\033[0m structure{'s' if total_structures != 1 else ''}: \033[1m{time_str}\033[0m", logging.WARNING)
-    print_and_log(f"Total: \033[1m{total_number_of_particles_projected}\033[0m particles projected, \033[1m{total_number_of_particles_with_saved_coordinates}\033[0m saved to {'.star file' if not imod_coordinate_file and not coord_coordinate_file else 'coordinate files'}" + (f", \033[1m{total_cropped_particles}\033[0m particles cropped" if crop_particles else ""), logging.WARNING)
-    print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m" + (f", Crop sub-directory: \033[1m{structure_names[0] if total_structures == 1 else '[structure_names]'}/Particles/\033[0m\n" if crop_particles else "\n"), logging.WARNING)
 
-    print_and_log(f"One .star file is located in {'the' if total_structures == 1 else 'each'} structure sub-directory.", logging.WARNING)
+    # Print the overall summary of the run
+    total_structure_sets = len(structure_set_names)
+    print_and_log(f"\n\033[1m{'-' * 100}\n{('VirtualIce Generation Summary').center(100)}\n{'-' * 100}\033[0m", logging.WARNING)
+    print_and_log(f"Time to generate \033[1m{num_micrographs}\033[0m micrograph{'s' if num_micrographs != 1 else ''} "
+                  f"from \033[1m{total_structure_sets}\033[0m structure set{'s' if total_structure_sets != 1 else ''}: "
+                  f"\033[1m{time_str}\033[0m", logging.WARNING)
 
+    # Print the total number of particles projected and saved to coordinate files, and cropped particles information if applicable
+    print_and_log(f"Total: \033[1m{total_number_of_particles_projected}\033[0m particles projected, "
+                  f"\033[1m{total_number_of_particles_with_saved_coordinates}\033[0m saved to coordinate files"
+                  + (f", \033[1m{total_cropped_particles}\033[0m particles cropped" if crop_particles else ""), logging.WARNING)
+
+    # Print the run directory
+    print_and_log(f"Run directory: \033[1m{output_directory}/\033[0m", logging.WARNING)
+
+    # Print information for each structure set
+    for structure_set_name, structure_set in zip(structure_set_names, structure_sets):
+        # Format the structure names in the set
+        structure_names = ", ".join([s[0] if isinstance(s, list) else s for s in structure_set])
+        print_and_log(f"Structure set: \033[1m{structure_set_name} ({structure_names})\033[0m", logging.WARNING)
+
+    #Binning/Downsampling information
+    if binning > 1:
+        print_and_log(f"  - Binned by {binning} data." if not keep else f"  - Binned data in bin_{binning} sub-director{'y' if total_structure_sets == 1 else 'ies'}.", logging.WARNING)
+
+    # STAR file information
+    print_and_log("  - One .star file per structure is in the SS sub-directory.", logging.WARNING)
+
+    # COORD file information
     if coord_coordinate_file:
-        print_and_log(f"One (x y) .coord file per micrograph is located in the structure sub-director{'y' if total_structures == 1 else 'ies'}.", logging.WARNING)
+        print_and_log("  - One (x, y) .coord file per micrograph is in the SS sub-directory.", logging.WARNING)
 
+    # IMOD file information
     if imod_coordinate_file:
-        print_and_log(f"One IMOD .mod file per micrograph is located in the structure sub-director{'y' if total_structures == 1 else 'ies'}.", logging.WARNING)
-        print_and_log("To open a micrograph with an IMOD .mod file, run a command of this form:", logging.WARNING)
-        print_and_log("  \033[1m3dmod image.mrc image.mod\033[0m  (Replace with your files)", logging.WARNING)
+        print_and_log("  - One IMOD .mod file per micrograph is in the SS sub-directory.", logging.WARNING)
+        print_and_log("    To view, run a command like this: \033[1m3dmod image.mrc image.mod\033[0m  (Replace with your files)", logging.WARNING)
+
     print_and_log(f"\033[1m{'-' * 100}\033[0m\n", logging.WARNING)
 
 def find_micrograph_files(structure_dirs):
@@ -3694,24 +3993,45 @@ def find_micrograph_files(structure_dirs):
     micrograph_files = sorted(micrograph_files, key=lambda f: (f.rsplit('.', 1)[0], extension_order.get('.' + f.rsplit('.', 1)[1], 3)))
     return micrograph_files
 
-def view_in_3dmod_async(micrograph_files, imod_coordinate_file):
+def view_in_3dmod_async(micrograph_files, imod_coordinate_file, structure_names):
     """
     Open micrograph files in 3dmod asynchronously.
 
     :param list micrograph_files: List of micrograph file paths to open in 3dmod.
     :param bool imod_coordinate_file: Whether IMOD .mod coordinate files were saved.
+    :param list structure_names: List of structure names associated with the micrograph.
     """
     print_and_log("", logging.DEBUG)
-    if len(micrograph_files) == 1 and imod_coordinate_file:  # Open the micrograph and coordinates if there's only 1 micrograph
-        mod_file = [micrograph_files[0].rsplit('.', 1)[0] + '.mod']
+
+    # If there's only one micrograph and IMOD coordinate files are requested, open the .mod file for the first structure
+    if len(micrograph_files) == 1 and imod_coordinate_file:
+        # Extract the base micrograph file name without the extension
+        base_micrograph = micrograph_files[0].rsplit('.', 1)[0]
+
+        # Now use the structure_names list to truncate the additional structure names
+        first_structure = structure_names[0][0]
+
+        # Find the position where the first structure name is appended in the basename
+        # Recover the original basename (before additional structure names were appended)
+        if f"_{first_structure}" in base_micrograph:
+            original_basename = base_micrograph.split(f"_{first_structure}")[0]
+            # Reconstruct the base micrograph with only the first structure name appended
+            base_micrograph = f"{original_basename}_{first_structure}"
+
+        # Now form the .mod file path for the first structure
+        mod_file = [f"{base_micrograph}.mod"]
+
+        # Launch 3dmod with the micrograph and the .mod file
         subprocess.run(["3dmod"] + micrograph_files + mod_file)
     else:
+        # If there are multiple micrographs, open them without .mod files
         subprocess.run(["3dmod"] + micrograph_files)
-    print_and_log("Opening micrographs in 3dmod...\n")
+
+    print_and_log("Opening micrographs in 3dmod...")
 
 def main():
     """
-    Main function: Loops over structures, generates micrographs, optionally crops particles,
+    Main function: Loops over structure sets, generates micrographs, optionally crops particles,
     optionally opens micrographs in 3dmod asynchronously, and prints run time & output information.
     """
     start_time = time.time()
@@ -3720,59 +4040,75 @@ def main():
     # Parse user arguments, check them, and update them conditionally if necessary
     args = parse_arguments(start_time_formatted)
 
-    # Loop over each provided structure and generate micrographs. Skip a structure if it doesn't download/exist
-    total_structures = len(args.structures)
+    # Initialize totals for eventual summary printing
+    total_structure_sets = len(args.structures)
     total_number_of_particles_projected = 0
     total_number_of_particles_with_saved_coordinates = 0
     total_cropped_particles = 0
+
+    # Store structure set names, tasks (ie. results), and the corresponding box sizes
+    structure_set_names = []
+    structure_set_box_sizes = []  # Store box sizes for each structure in each set
+    tasks = []
+
+    # Process each structure set in parallel (each set contains one or more structures)
     with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
-        # Store structure_names and tasks (ie. results)
-        structure_names = []
-        tasks = []
-        for structure_index, structure_input in enumerate(args.structures):
-            result = process_structure_input(structure_input, args.max_emdb_size, args.std_threshold, args.apix)
-            if result:  # Check if result is not None
-                structure_name, structure_type = result  # Now we're sure structure_name and structure_type are valid
-                task = executor.submit(generate_micrographs, args, structure_name, structure_type, structure_index, total_structures)
-                tasks.append((task, structure_name))  # Store task and associated structure_name
-            else:
-                print_and_log(f"Skipping structure (error or non-existence): {structure_input} (use `-s r` for a random structure)", logging.WARNING)
+        for structure_set_index, structure_set in enumerate(args.structures):
+            # Submit task for each structure set
+            task = executor.submit(generate_micrographs, args, structure_set, structure_set_index, total_structure_sets)
+            tasks.append((task, structure_set))  # Store task and associated structure set
 
         # Wait for all tasks to complete and aggregate results
-        for task, structure_name in tasks:
-            structure_names.append(structure_name)
-            num_particles_projected, num_particles_with_saved_coordinates, box_size = task.result()
-            total_number_of_particles_projected += num_particles_projected
-            total_number_of_particles_with_saved_coordinates += num_particles_with_saved_coordinates
+        for task, structure_set in tasks:
+            structure_set_name = f"structure_set_{tasks.index((task, structure_set)) + 1}"  # Name as structure_set_1, structure_set_2, etc.
+            structure_set_names.append(structure_set_name)
+            structure_particles_projected, structure_particles_saved, box_sizes = task.result()
+
+            # Store box sizes for further particle cropping
+            structure_set_box_sizes.append(box_sizes)
+
+            # Aggregate totals
+            total_number_of_particles_projected += sum(structure_particles_projected.values())
+            total_number_of_particles_with_saved_coordinates += sum(structure_particles_saved.values())
 
     # Open 3dmod asynchronously in a separate thread so cropping can happen simultaneously
     if args.view_in_3dmod:
-        micrograph_files = find_micrograph_files(structure_names)
+        micrograph_files = find_micrograph_files(structure_set_names)
         if micrograph_files:
-            threading.Thread(target=view_in_3dmod_async, args=(micrograph_files, args.imod_coordinate_file)).start()
+            threading.Thread(target=view_in_3dmod_async, args=(micrograph_files, args.imod_coordinate_file, args.structures[0])).start()
 
     # Crop particles if requested
     if args.crop_particles:
         with ProcessPoolExecutor(max_workers=args.parallelize_structures) as executor:
             crop_tasks = []
-            for structure_name in structure_names:
-                box_size = args.box_size if args.box_size is not None else box_size
-                crop_task = executor.submit(crop_particles_from_micrographs, structure_name, box_size, args.apix, args.max_crop_particles, args.cpus, args.use_gpu, args.gpu_ids)
-                crop_tasks.append(crop_task)
+            for structure_set_name, box_sizes in zip(structure_set_names, structure_set_box_sizes):
+                for i, structure_name in enumerate(args.structures[structure_set_names.index(structure_set_name)]):
+                    # Use the appropriate box_size for each structure
+                    box_size = args.box_size if args.box_size is not None else box_sizes[i]
+                    structure_name_str = structure_name[0] if isinstance(structure_name, list) else structure_name  # Converts element of structure set to structure name, if necessary
+                    crop_task = executor.submit(crop_particles_from_micrographs, structure_name_str, structure_set_name, box_size, args.apix, args.max_crop_particles, args.cpus, args.use_gpu, args.gpu_ids)
+                    crop_tasks.append(crop_task)
 
             for crop_task in crop_tasks:
                 total_cropped_particles += crop_task.result()
 
-    for structure_name in structure_names:
-        clean_up(args, structure_name)
+    # Clean up and finalize each structure set
+    for structure_set_name, structure_set in zip(structure_set_names, args.structures):
+        # Extract structure names from the structure set (flattened, if needed)
+        structure_names = [structure[0] if isinstance(structure, list) else structure for structure in structure_set]
+        clean_up(args, structure_set_name, structure_names)
 
-    num_micrographs = args.num_images * len(structure_names)
+    # Calculate total number of micrographs generated
+    num_micrographs = args.num_images * len(structure_set_names)
+
+    # Calculate run time
     end_time = time.time()
     time_str = time_diff(end_time - start_time)
 
-    print_run_information(num_micrographs, structure_names, time_str, total_number_of_particles_projected,
+    # Print summary of the run
+    print_run_information(num_micrographs, structure_set_names, args.structures, time_str, total_number_of_particles_projected,
                           total_number_of_particles_with_saved_coordinates, total_cropped_particles, args.crop_particles,
-                          args.imod_coordinate_file, args.coord_coordinate_file, args.output_directory)
+                          args.imod_coordinate_file, args.coord_coordinate_file, args.binning, args.keep, args.output_directory)
 
 if __name__ == "__main__":
     main()
