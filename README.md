@@ -11,7 +11,7 @@ VirtualIce is a feature-rich half-synthetic cryoEM micrograph generator that use
 
 - Multiple structures can now be requested (structure sets).
   - Use the same --structures flag followed by either a single structure or multiple. Supports any number of structure sets, like this: 
-    virtualice.py -s 1TIM [1PMA, 50882] [my_structure1.mrc, 3DRE, 6TIM]
+    - virtualice.py -s 1TIM [1PMA, 50882] [my_structure1.mrc, 3DRE, 6TIM]
   - The above command will make one set of micrographs with only PDB 1TIM, another set with PDB 1PMA and EMD-50882, and another set with a local file (my_structure1.mrc), PDB 3DRE, and PDB 6TIM.
   - Preferred orientation, particle distributions, and overlapping & aggregated particles are fully supported.
   - Filtering of edge, overlapping, and obscured particles is fully supported.
