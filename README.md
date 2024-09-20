@@ -83,11 +83,6 @@ virtualice.py -s [1TIM, 11638] 1PMA -n 5
 
 Generates `-n` _5_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and `-n` _5_ random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
 
-Arguments:
-
-- `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
-- `-n`, `--num_images`: Number of micrographs to generate.
-
 ### Advanced example usage:
 
 ```
