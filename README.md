@@ -65,7 +65,7 @@ The script can be run from the command line and takes a number of arguments.
 Basic example usage:
 
 ```
-./virtualice.py -s 1TIM -n 10
+virtualice.py -s 1TIM -n 10
 ```
 
 Generates `-n` _10_ random micrographs of PDB `-s` _1TIM_.
@@ -75,10 +75,23 @@ Arguments:
 - `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
 - `-n`, `--num_images`: Number of micrographs to generate.
 
+Basic example usage:
+
+```
+virtualice.py -s [1TIM, 11638] 1PMA -n 10
+```
+
+Generates `-n` _10_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and 10 random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
+
+Arguments:
+
+- `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
+- `-n`, `--num_images`: Number of micrographs to generate.
+
 Advanced example usage:
 
 ```
-./virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2
+virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2
 ```
 
 Generates `-n` _3_ random micrographs of PDB `-s` _1TIM_, a <i>r</i>andom EMDB/PDB structure, a local structure called _my_structure.mrc_, and EMD-_11638_. Outputs an `-I` IMOD .mod coordinate file, `-P` png, and `-J` jpeg (quality `-Q` _90_) for each micrograph, and bins `-b` all images by _4_. Uses a `-D` <i>n</i>on-random distribution of particles and `-ps` parallelizes micrograph generation across _2_ CPUs.
