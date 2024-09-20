@@ -62,7 +62,7 @@ To use VirtualIce, clone the github directory, make virtualice.py executable (`c
 
 The script can be run from the command line and takes a number of arguments.
 
-Basic example usage:
+### Basic example usage:
 
 ```
 virtualice.py -s 1TIM -n 10
@@ -75,20 +75,20 @@ Arguments:
 - `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
 - `-n`, `--num_images`: Number of micrographs to generate.
 
-Basic example usage:
+### Basic example usage:
 
 ```
-virtualice.py -s [1TIM, 11638] 1PMA -n 10
+virtualice.py -s [1TIM, 11638] 1PMA -n 5
 ```
 
-Generates `-n` _10_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and 10 random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
+Generates `-n` _5_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and `-n` _5_ random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
 
 Arguments:
 
 - `-s`, `--structures`: Specify PDB ID(s), EMDB ID(s), local files, and/or 'r' for random PDB/EMDB structures.
 - `-n`, `--num_images`: Number of micrographs to generate.
 
-Advanced example usage:
+### Advanced example usage:
 
 ```
 virtualice.py -s 1TIM r my_structure.mrc 11638 -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2
