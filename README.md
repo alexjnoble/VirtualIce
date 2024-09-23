@@ -129,7 +129,7 @@ VirtualIce is under the MIT License, allowing broad usage freedom, but it should
 
 ### Intended Use
 
-VirtualIce is designed for educational and research purposes, specifically to aid in the development, testing, and validation of cryoEM image analysis algorithms by generating synthetic cryoEM micrographs and particles.
+VirtualIce is designed for educational and research purposes, specifically to aid in the development, testing, and validation of cryoEM image analysis algorithms by generating half-synthetic cryoEM micrographs and particles.
 
 ### Ethical Considerations
 
