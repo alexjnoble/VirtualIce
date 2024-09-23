@@ -78,10 +78,10 @@ Arguments:
 ### Basic example usage:
 
 ```
-virtualice.py -s [1TIM, 11638] 1PMA -n 5
+virtualice.py -s [1TIM, 11638] 1PMA -n 50
 ```
 
-Generates `-n` _5_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and `-n` _5_ random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
+Generates `-n` _50_ random micrographs for the structure set consisting of `-s` PDB _1TIM_ and EMDB-_11638_ (multi-structure micrographs), and `-n` _50_ random micrographs of `-s` PDB _1PMA_ (single-structure micrographs).
 
 ### Advanced example usage:
 
@@ -95,11 +95,31 @@ Arguments:
 
 - `-I`, `--imod_coordinate_file`: Also output one IMOD .mod coordinate file per micrograph.
 - `-P`, `--png`: Output in PNG format.
-- `-P`, `--jpeg`: Output in JPEG format.
+- `-J`, `--jpeg`: Output in JPEG format.
 - `-Q`, `--jpeg-quality`: JPEG image quality.
 - `-b`, `--binning`: Bin micrographs by downsampling.
 - `-D`, `--distribution`: Distribution type for generating particle locations.
 - `-ps`, `--parallellize_structures`: Parallel processes for micrograph generation across the structures requested.
+
+
+### Advanced example usage:
+
+```
+virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,90,0] [90 180 *] -aa l h r -ne --use_cpu -V 2 -3
+```
+
+Generates `-n` _5_ random micrographs of PDB `-s` 1PMA (proteasome) with `-om` _preferred_ orientation for `-pw` 90% (0.9) of particles. The preferred orientations are defined by random selections of `-pa` _[*,90,0]_ (free to rotate along the first Z axis, then rotate 90 degrees in Y, do not rotate in Z) and _[90 180 0]_ (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then free to rotate along the resulting Z). The `-aa` aggregation amount is chosen from _l_ow and _h_igh values _r_andomly for each of the 5 micrographs. `-ne` Edge particles are not included. `--use_cpu` Only CPUs are used (no GPUs). Terminal `-V` verbosity is set to _2_ (verbose). The resulting micrographs are opened with `-3` 3dmod after generation.
+
+Arguments:
+
+- `-om`, `--orientation_mode`: Orientation mode for projections.
+- `-pw`, `--preferred_weight`: Weight of the preferred orientations in the range [0, 1].
+- `-pa`, `--preferred_angles`: List of sets of three Euler angles (in degrees) for preferred orientations.
+- `-aa`, `--aggregation_amount`: Amount of particle aggregation.
+- `-ne`, `--no_edge_particles`: Prevent particles from being placed up to the edge of the micrograph.
+- `--use_cpu`, Use CPU for processing instead of GPU.
+- `-V`, `--verbosity`: Set verbosity level.
+- `-3`, `--view_in_3dmod`: View generated micrographs in 3dmod at the end of the run.
 
 Additional arguments exist for fine-tuning the generation process including ice thickness, junk filtering, and CTF parameters.
 
