@@ -278,6 +278,74 @@ def parse_aggregation_amount(values, num_micrographs):
 
         return combined_values
 
+def convert_color_to_rgb(color):
+    """
+    Convert color name or RGB values to a tuple of RGB integers.
+
+    :param str or list color: Color name or list of RGB values.
+    :return tuple: RGB values as integers (0-255).
+    """
+    color_map = {
+        'red': (255, 0, 0),
+        'green': (0, 255, 0),
+        'blue': (0, 0, 255),
+        'yellow': (255, 255, 0),
+        'cyan': (0, 255, 255),
+        'magenta': (255, 0, 255),
+        'white': (255, 255, 255),
+        'black': (0, 0, 0),
+        'gray': (128, 128, 128),
+        'orange': (255, 165, 0),
+        'purple': (128, 0, 128),
+        'pink': (255, 192, 203),
+        'brown': (165, 42, 42),
+        'navy': (0, 0, 128),
+        'teal': (0, 128, 128),
+        'maroon': (128, 0, 0),
+        'olive': (128, 128, 0),
+        'lime': (0, 255, 0),
+        'aqua': (0, 255, 255),
+        'silver': (192, 192, 192),
+        'indigo': (75, 0, 130),
+        'violet': (238, 130, 238),
+        'turquoise': (64, 224, 208),
+        'coral': (255, 127, 80),
+        'gold': (255, 215, 0),
+        'salmon': (250, 128, 114),
+        'khaki': (240, 230, 140),
+        'plum': (221, 160, 221),
+        'crimson': (220, 20, 60),
+        'lavender': (230, 230, 250),
+        'beige': (245, 245, 220),
+        'ivory': (255, 255, 240),
+        'mint': (189, 252, 201),
+        'forest_green': (34, 139, 34),
+        'royal_blue': (65, 105, 225),
+        'dark_red': (139, 0, 0),
+        'sky_blue': (135, 206, 235),
+        'hot_pink': (255, 105, 180),
+        'sea_green': (46, 139, 87),
+        'steel_blue': (70, 130, 180),
+        'sienna': (160, 82, 45),
+        'tan': (210, 180, 140),
+        'dark_violet': (148, 0, 211),
+        'firebrick': (178, 34, 34),
+        'midnight_blue': (25, 25, 112),
+        'rosy_brown': (188, 143, 143),
+        'light_coral': (240, 128, 128),
+    }
+
+    if isinstance(color, str):
+        color = color.lower()
+        if color in color_map:
+            return color_map[color]
+        else:
+            raise ValueError(f"Unknown color name: {color}")
+    elif isinstance(color, list) and len(color) == 3:
+        return tuple(map(int, color))
+    else:
+        raise ValueError("Color must be a valid color name or a list of 3 RGB values (0-255)")
+
 def validate_positive_int(parser, arg_name, value):
     """
     Validates if a given value is a positive integer.
@@ -419,6 +487,9 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
     output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
     output_group.add_argument("-3", "--view_in_3dmod", action='store_true', help="View generated micrographs in 3dmod at the end of the run")
+    output_group.add_argument("-3r", "--imod_circle_radius", type=int, default=10, help="Radius of the circle drawn in IMOD .mod files. Default is %(default)s")
+    output_group.add_argument("-3t", "--imod_circle_thickness", type=int, default=2, help="Thickness of the circular line drawn in IMOD .mod files. Default is %(default)s")
+    output_group.add_argument("-3c", "--imod_circle_color", nargs='+', default='green', help="Color of the circle drawn in IMOD .mod files. Can be a color name (e.g. 'red', 'green', 'blue') or three RGB values (0-255). Default is %(default)s")
 
     # System and Program Options
     misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
@@ -568,6 +639,13 @@ def parse_arguments(script_start_time):
     else:
         args.allow_overlap_random = False
         args.allow_overlap = (args.allow_overlap == 'True')
+
+    if len(args.imod_circle_color) == 1:
+        args.imod_circle_color = args.imod_circle_color[0]  # It's a color name
+    elif len(args.imod_circle_color) == 3:
+        args.imod_circle_color = [int(v) for v in args.imod_circle_color]  # It's RGB values
+    else:
+        raise ValueError("--imod_circle_color must be either a color name or exactly 3 RGB values")
 
     # Print all arguments for the user's information
     formatted_output = ""
@@ -1395,31 +1473,48 @@ def write_all_coordinates_to_star(structure_name, image_path, particle_locations
             alpha, beta, gamma = orientation
             star_file.write(f'{image_path} {x_shift} {y_shift} {alpha} {beta} {gamma} 1 {defocus} {defocus} 0\n')
 
-def convert_point_to_model(point_file, output_file):
+def convert_point_to_model(point_file, output_file, circle_radius, circle_thickness, structure_name, circle_color):
     """
     Write an IMOD .mod file with particle coordinates.
 
     :param str point_file: Path to the input .point file.
     :param str output_file: Output file path for the .mod file.
+    :param int circle_radius: Radius of the circle to be drawn at each particle location.
+    :param int circle_thickness: Thickness of the circular line drawn in IMOD .mod files.
+    :param str structure_name: Name of the structure to be included in the .mod file.
+    :param tuple circle_color: RGB color values for the circle (0-255).
 
     This function writes a .mod file to the output_file path.
     """
     print_and_log("", logging.DEBUG)
     try:
-        # Run point2model command and give particles locations a circle of radius 3
-        output = subprocess.run(["point2model", "-circle", "3", "-scat", point_file, output_file], capture_output=True, text=True, check=True)
+        # Run point2model command with updated arguments
+        color_str = f"{circle_color[0]},{circle_color[1]},{circle_color[2]}"
+        output = subprocess.run([
+            "point2model",
+            "-circle", str(circle_radius),
+            "-width", str(circle_thickness),
+            "-name", structure_name,
+            "-color", color_str,
+            "-scat", point_file,
+            output_file
+        ], capture_output=True, text=True, check=True)
         print_and_log(output, logging.DEBUG)
     except subprocess.CalledProcessError:
         print_and_log("Error while converting coordinates using point2model.", logging.WARNING)
     except FileNotFoundError:
         print_and_log("point2model not found. Ensure IMOD is installed and point2model is in your system's PATH.", logging.WARNING)
 
-def write_mod_file(coordinates, output_file):
+def write_mod_file(coordinates, output_file, circle_radius, circle_thickness, structure_name, circle_color):
     """
     Write an IMOD .mod file with particle coordinates.
 
     :param list_of_tuples coordinates: List of (x, y) coordinates for the particles.
     :param str output_file: Output file path for the .mod file.
+    :param int circle_radius: Radius of the circle to be drawn at each particle location.
+    :param int circle_thickness: Thickness of the circular line drawn in IMOD .mod files.
+    :param str structure_name: Name of the structure to be included in the .mod file.
+    :param tuple circle_color: RGB color values for the circle (0-255).
 
     This function converts particle coordinates in a .point file to an IMOD .mod file and writes it to output_file.
     """
@@ -1431,7 +1526,7 @@ def write_mod_file(coordinates, output_file):
             f.write(f"{x} {y} 0\n")  # Writing each coordinate as a new line in the .point file
 
     # Convert the .point file to a .mod file
-    convert_point_to_model(point_file, output_file)
+    convert_point_to_model(point_file, output_file, circle_radius, circle_thickness, structure_name, circle_color)
 
 def write_coord_file(coordinates, output_file):
     """
@@ -1449,7 +1544,8 @@ def write_coord_file(coordinates, output_file):
             f.write(f"{x} {y}\n")  # Writing each coordinate as a new line in the .coord file
 
 def save_particle_coordinates(structure_name, particle_locations_with_orientations, output_path, 
-                              micrograph_output_path, imod_coordinate_file, coord_coordinate_file, defocus):
+                              micrograph_output_path, imod_coordinate_file, coord_coordinate_file,
+                              defocus, imod_circle_radius, imod_circle_thickness, imod_circle_color):
     """
     Saves particle coordinates in specified formats (.star, .mod, .coord).
 
@@ -1461,6 +1557,9 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
     :param bool imod_coordinate_file: Whether to output IMOD .mod files.
     :param bool coord_coordinate_file: Whether to output .coord files.
     :param float defocus: The defocus value to add to the STAR file.
+    :param int imod_circle_radius: Radius of the circle drawn in IMOD .mod files.
+    :param int imod_circle_thickness: Thickness of the circular line drawn in IMOD .mod files.
+    :param tuple imod_circle_color: Color of the circle drawn in IMOD .mod files.
 
     This function writes a .star file and optionally generates .mod and .coord files.
     """
@@ -1475,7 +1574,7 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
 
     # Save IMOD .mod files if requested
     if imod_coordinate_file:
-        write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod")
+        write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod", imod_circle_radius, imod_circle_thickness, structure_name, imod_circle_color)
 
     # Save .coord files if requested
     if coord_coordinate_file:
@@ -3178,7 +3277,8 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     for i, structure_name in enumerate(structure_names):
         structure_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(final_filtered_particle_locations[i], all_orientations[i])]
         save_particle_coordinates(structure_name, structure_particle_locations_with_orientations, output_paths[i], output_options['output_file_path'],
-                                  output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus)
+                                  output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus,
+                                  output_options['imod_circle_radius'], output_options['imod_circle_thickness'], output_options['imod_circle_color'])
         # Track the number of saved particles for this structure
         num_particles_saved_per_structure.append(len(structure_particle_locations_with_orientations))
 
@@ -3625,7 +3725,10 @@ def process_single_micrograph(args, structures, line, total_structures, structur
         'jpeg_quality': args.jpeg_quality,
         'imod_coordinate_file': args.imod_coordinate_file,
         'coord_coordinate_file': args.coord_coordinate_file,
-        'output_paths': [f"{structure_set_name}/{fname}_{structure[0]}{repeat_suffix}" for structure in structures]
+        'output_paths': [f"{structure_set_name}/{fname}_{structure[0]}{repeat_suffix}" for structure in structures],
+        'imod_circle_radius': args.imod_circle_radius,
+        'imod_circle_thickness': args.imod_circle_thickness,
+        'imod_circle_color': convert_color_to_rgb(args.imod_circle_color)
     }
 
     num_particles_projected, num_particles_saved_per_structure = add_images(
@@ -3987,7 +4090,7 @@ def view_in_3dmod_async(micrograph_files, imod_coordinate_file, structure_names)
         base_micrograph = micrograph_files[0].rsplit('.', 1)[0]
 
         # Now use the structure_names list to truncate the additional structure names
-        first_structure = structure_names[0][0]
+        first_structure = structure_names[0][0] if isinstance(structure_names[0], list) else structure_names[0]
 
         # Find the position where the first structure name is appended in the basename
         # Recover the original basename (before additional structure names were appended)
