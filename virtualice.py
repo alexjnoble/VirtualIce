@@ -95,7 +95,7 @@ def check_num_particles(value):
     try:
         ivalue = int(value)
         if ivalue < 2 or ivalue >= 1000000:
-            raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000")
+            raise argparse.ArgumentTypeError("Number of particles must be between 2 and 1000000 or 'max'")
         return ivalue
     except ValueError:
         raise argparse.ArgumentTypeError("Number of particles must be an integer between 2 and 1000000 or 'max'")
@@ -112,7 +112,7 @@ def check_binning(value):
     ivalue = int(value)
     try:
         if ivalue < 2 or ivalue >= 64:
-            raise argparse.ArgumentTypeError("Binning must be between 2 and 64")
+            raise argparse.ArgumentTypeError("Binning must be an integer between 2 and 64")
         return ivalue
     except ValueError:
         raise argparse.ArgumentTypeError("Binning must be an integer between 2 and 64")
@@ -135,6 +135,7 @@ def format_structure_sets(structure_sets):
     :param list_of_lists structure_sets: A list of structure sets, where each set is a list of structure IDs.
     :return list_of_str: A list of formatted structure sets as strings.
     """
+    print_and_log("", logging.DEBUG)
     formatted_sets = []
 
     # Iterate over each structure set
@@ -168,6 +169,7 @@ def parse_structure_input(structure_input):
     :return list_of_lists or list_of_lists_of_lists: A list of structure sets, where each set is a list of structure IDs.
     :raises argparse.ArgumentTypeError: If the structure input format is invalid.
     """
+    print_and_log("", logging.DEBUG)
     structure_sets = []
     current_set = []
     in_bracket = False
@@ -255,7 +257,7 @@ def parse_aggregation_amount(values, num_micrographs):
             return [numeric_value]
 
     if values[-1].lower() in {'r', 'random'}:
-        # Handle the case where values is just 'r' or 'random'
+        # Handle the case where values is 'r' or 'random'
         if len(values) == 1:
             random_value = random.uniform(0, 10)
             return [random_value] * num_micrographs  # Repeat the random value
@@ -310,40 +312,6 @@ def validate_positive_float(parser, arg_name, value):
     except ValueError:
         raise argparse.ArgumentTypeError("{arg_name} must be a positive float.")
 
-def remove_duplicates_structures(lst):
-    """
-    Removes duplicate elements from the --structures list while converting to upper case
-    for items without file extensions. Special entries like 'r', 'rp', 're', 'rm',
-    'random' are not considered duplicates and can repeat.
-
-    :param list lst: The input list from which duplicates need to be removed.
-
-    :returns list: A new list with duplicate elements removed, preserving the order of the
-                   first unique structure name (case-insensitive for items without file extensions).
-    """
-    print_and_log("", logging.DEBUG)
-    seen = set()
-    clean_lst = []
-    duplicates = []
-    exclude_duplicates = {'R', 'RP', 'RE', 'RM', 'RANDOM'}  # Set of entries to exclude from duplicate removal
-
-    for item in lst:
-        if '.' in item and item.rsplit('.', 1)[1]:  # Check if item has a file extension (ie. local file)
-            normalized_item = item
-        else:
-            normalized_item = item.upper()
-
-        if normalized_item in seen and normalized_item not in exclude_duplicates:
-            duplicates.append(item)
-        else:
-            seen.add(normalized_item)
-            clean_lst.append(item)
-
-    if duplicates:
-        print_and_log(f"\nRemoving duplicate {'request' if len(duplicates) == 1 else 'requests'}: {', '.join(duplicates)}\n")
-
-    return clean_lst
-
 def parse_arguments(script_start_time):
     """
     Parses command-line arguments.
@@ -358,14 +326,18 @@ def parse_arguments(script_start_time):
     epilog="""
 \033[1mExamples:\033[0m
   1. Basic usage: virtualice.py -s 1TIM -n 10
-     Generates 10 random micrographs of PDB 1TIM.
+     Generates 10 random micrographs of PDB 1TIM (single-structure micrographs).
 
-  2. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2 -C
+  2. Basic usage: virtualice.py -s [1TIM, 11638] 1PMA -n 10
+     Generates 10 random micrographs for the structure set consisting of PDB 1TIM and EMDB-11638 (multi-structure micrographs),
+     and 10 random micrographs of PDB 1PMA (single-structure micrographs).
+
+  3. Advanced usage: virtualice.py -s 1TIM r my_structure.mrc 11638 rp -n 3 -I -P -J -Q 90 -b 4 -D n -ps 2 -C
      Generates 3 random micrographs of PDB 1TIM, a random EMDB/PDB structure, a local structure called my_structure.mrc, EMD-11638, and a random PDB.
      Outputs an IMOD .mod coordinate file, png, and jpeg (quality 90) for each micrograph, and bins all images by 4.
      Uses a non-random distribution of particles, parallelizes structure generation across 2 CPUs, and crops particles.
 
-  3. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,90,0] [90 180 *] -aa l h r -ne --use_cpu -V 2 -3
+  4. Advanced usage: virtualice.py -s 1PMA -n 5 -om preferred -pw 0.9 -pa [*,90,0] [90 180 *] -aa l h r -ne --use_cpu -V 2 -3
      Generates 5 random micrographs of PDB 1PMA (proteasome) with preferred orientation for 90% of particles. The preferred orientations are defined
      by random selections of [*,90,0] (free to rotate along the first Z axis, then rotate 90 degrees in Y, do not rotate in Z) and
      [90 180 0] (rotate 90 degrees along the first Z axis, then rotate 180 degrees in Y, then free to rotate along the resulting Z). The aggregation amount is
@@ -388,9 +360,8 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-a", "--apix", type=float, default=1.096, help="Pixel size (in Angstroms) of the ice images, used to scale pdbs during pdb>mrc conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s (the pixel size of the ice images used during development)")
     particle_micrograph_group.add_argument("-r", "--pdb_to_mrc_resolution", type=float, default=3, help="Resolution in Angstroms for PDB to MRC conversion (EMAN2 e2pdb2mrc.py option). Default is %(default)s")
     particle_micrograph_group.add_argument("-st", "--std_threshold", type=float, default=-1.0, help="Threshold for removing noise from a downloaded/imported .mrc/.map file in terms of standard deviations above the mean. The idea is to not have dust around the 3D volume from the beginning. Default is %(default)s")
-    particle_micrograph_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise and optionally apply dose damaging. Default is %(default)s")
     particle_micrograph_group.add_argument("-sp", "--scale_percent", type=float, default=33.33, help="How much larger to make the resulting mrc file from the pdb file compared to the minimum equilateral cube. Extra space allows for more delocalized CTF information (default: %(default)s; ie. %(default)s%% larger)")
-    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['r', 'random', 'n', 'non_random', 'm', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
+    particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['m', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular', 'r', 'random', 'n', 'non_random'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
     particle_micrograph_group.add_argument("-aa", "--aggregation_amount", nargs='+', default=['low', 'random'], help="Amount of particle aggregation. Aggregation amounts can be set per-run or per-micrograph. To set per-run, input 0-10, 'low', 'medium', 'high', or 'random'. To set multiple aggregation amounts that will be chose randomly per-micrograph, input combinations like 'low medium', 'low high', '2 5', or 'low 3 9 10'. To set random aggregation amounts within a range, append any word input combination with 'random', like 'random random' to give the full range, or 'low medium random' to give a range from 0 to 6.7. Abbreviations work too, like '3.2 l h r'. Default is %(default)s")
     particle_micrograph_group.add_argument("-ao", "--allow_overlap", type=str, choices=['True', 'False', 'random'], default='random', help="Specify whether to allow overlapping particles. Options are 'True', 'False', or 'random'. Default is %(default)s")
     particle_micrograph_group.add_argument("-nl", "--num_particle_layers", type=int, default=2, help="If overlapping particles is allowed, this is the number of overlapping particle layers allowed (soft condition, not strict. Used in determining the maximum number of particles that can be placed in a micrograph). Default is %(default)s")
@@ -398,8 +369,9 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
     particle_micrograph_group.add_argument("-ne", "--no_edge_particles", action="store_true", help="Prevent particles from being placed up to the edge of the micrograph. By default, particles can be placed up to the edge.")
     particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
-    # TBD: Need to make a new border distance value for which partiles are saved based on distance from the borders
+    # TBD: Need to make a new border distance value for which particles are saved based on distance from the borders
     #particle_micrograph_group.add_argument("-sb", "--save_border", type=int, default=None, help="Minimum distance from the image border required to save a particle's coordinates to the output files. Default is %(default)s, which will use the value of --border if specified, otherwise half of the particle box size.")
+    #particle_micrograph_group.add_argument("--save_only_obscured_particles", action='store_true', help="Save only overlapping particles and within the junk masks.")
 
     # Simulation Options
     simulation_group = parser.add_argument_group('\033[1mSimulation Options\033[0m')
@@ -407,6 +379,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-da", "--dose_a", type=float, required=False, help="Custom value for the \'a\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-db", "--dose_b", type=float, required=False, help="Custom value for the \'b\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
     simulation_group.add_argument("-dc", "--dose_c", type=float, required=False, help="Custom value for the \'c\' variable in equation (3) of Grant & Grigorieff, 2015 (only required if '--dose-preset Custom' is chosen).")
+    simulation_group.add_argument("-nf", "--num_simulated_particle_frames", type=int, default=50, help="Number of simulated particle frames to generate Poisson noise and optionally apply dose damaging. Default is %(default)s")
     simulation_group.add_argument("-m", "--min_ice_thickness", type=float, default=30, help="Minimum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-M", "--max_ice_thickness", type=float, default=150, help="Maximum ice thickness, which scales how much the particle is added to the image (this is a relative value). Default is %(default)s")
     simulation_group.add_argument("-t", "--ice_thickness", type=float, help="Request a specific ice thickness, which scales how much the particle is added to the image (this is a relative value). This will override --min_ice_thickness and --max_ice_thickness. Note: When choosing 'micrograph' particle distribution, the ice thickness uses the same gradient map to locally scale simulated ice thickness.")
@@ -414,7 +387,7 @@ def parse_arguments(script_start_time):
     simulation_group.add_argument("-om", "--orientation_mode", type=str, choices=['random', 'uniform', 'preferred'], default='random', help="Orientation mode for projections. Options are: random, uniform, preferred. Default is %(default)s")
     simulation_group.add_argument("-pa", "--preferred_angles", type=str, nargs='+', default=None, help="List of sets of three Euler angles (in degrees) for preferred orientations. Use '*' as a wildcard for random angles. Example: '[90,0,0]' or '[*,0,90]'. Euler angles are in the range [0, 360] for alpha and gamma, and [0, 180] for beta. Default is %(default)s")
     simulation_group.add_argument("-av", "--angle_variation", type=float, default=5.0, help="Standard deviation for normal distribution of variations around preferred angles (in degrees). Default is %(default)s")
-    simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.8, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
+    simulation_group.add_argument("-pw", "--preferred_weight", type=float, default=0.9, help="Weight of the preferred orientations in the range [0, 1] (only used if orientation_mode is preferred). Default is %(default)s")
     simulation_group.add_argument("-amp", "--ampcont", type=float, default=10, help="Amplitude contrast percentage when applying CTF to projections (EMAN2 CTF option). Default is %(default)s (ie. 10%%)")
     simulation_group.add_argument("-bf", "--bfactor", type=float, default=50, help="B-factor in A^2 when applying CTF to projections (EMAN2 CTF option). Default is %(default)s")
     simulation_group.add_argument("-cs", "--Cs", type=float, default=0.001, help="Microscope spherical aberration when applying CTF to projections (EMAN2 CTF option). Default is %(default)s because the microscope used to collect the provided buffer cryoEM micrographs has a Cs corrector")
@@ -466,8 +439,6 @@ def parse_arguments(script_start_time):
     # Set verbosity level
     args.verbosity = 0 if args.quiet else args.verbosity
 
-    args.structures = parse_structure_input(args.structures)
-
     # Make local paths absolute
     args.image_list_file = os.path.abspath(args.image_list_file)
     args.image_directory = os.path.abspath(args.image_directory)
@@ -487,6 +458,8 @@ def parse_arguments(script_start_time):
 
     # Setup logging based on the verbosity level
     setup_logging(script_start_time, args.verbosity)
+
+    args.structures = parse_structure_input(args.structures)
 
     # Determine if GPU should be used
     args.use_gpu = not args.use_cpu and gpu_available
@@ -872,7 +845,7 @@ def download_pdb(pdb_id, suppress_errors=False):
     if not downloaded_any:
         return False
 
-    # Determine the largest .pdb file and remove the other one if both exist
+    # Determine the largest .pdb file (which should be the symmetrized one; entries are not consistent) and remove the other one if both exist
     if os.path.exists(regular_pdb_path) and os.path.exists(symmetrized_pdb_path):
         if os.path.getsize(symmetrized_pdb_path) > os.path.getsize(regular_pdb_path):
             print_and_log(f"[{pdb_id}] Downloaded symmetrized PDB {pdb_id}")
@@ -1207,12 +1180,38 @@ def scale_mrc_file(input_mrc_path, pixelsize):
     except subprocess.CalledProcessError as e:
         print_and_log(f"Error during scaling operation: {e}", logging.ERROR)
 
+def convert_pdb_to_mrc(pdb_name, apix, res):
+    """
+    Convert a PDB file to MRC format using EMAN2's e2pdb2mrc.py script.
+
+    :param str pdb_name: The name of the PDB to be converted.
+    :param float apix: The pixel size used in the conversion.
+    :param int res: The resolution to be used in the conversion.
+
+    :return int: The mass extracted from the e2pdb2mrc.py script output.
+
+    This function writes a .pdb file to the disk.
+    """
+    print_and_log("", logging.DEBUG)
+    print_and_log(f"[{pdb_name}] Converting PDB to MRC using EMAN2's e2pdb2mrc.py...")
+    cmd = ["e2pdb2mrc.py", "--apix", str(apix), "--res", str(res), "--center", f"{pdb_name}.pdb", f"{pdb_name}.mrc"]
+    output = subprocess.run(cmd, capture_output=True, text=True)
+    print_and_log(output, logging.DEBUG)
+    try:
+        # Attempt to extract the mass from the output
+        mass = int([line for line in output.stdout.split("\n") if "mass of" in line][0].split()[-2])
+    except IndexError:
+        # If the mass is not found in the output, set it to 0 and print a warning
+        mass = 0
+        print_and_log(f"[{pdb_name}]Warning: Mass not found for PDB. Setting mass to 0.", logging.WARNING)
+    return mass
+
 def reorient_mrc(input_mrc_path):
     """
     Reorient an MRC file so that the structure's principal axes align with the coordinate axes.
 
-    The function performs PCA on the non-zero voxels to align the longest axis with the x-axis,
-    the second longest axis with the y-axis, and the third longest axis with the z-axis.
+    The function performs PCA on the non-zero voxels to align the longest axis with the z-axis,
+    the second longest axis with the y-axis, and the third longest axis with the x-axis.
 
     :param str input_mrc_path: The path to the input MRC file.
     """
@@ -1245,32 +1244,6 @@ def reorient_mrc(input_mrc_path):
             reoriented_data[new_coord[0], new_coord[1], new_coord[2]] = data[original_coord[0], original_coord[1], original_coord[2]]
 
     return reoriented_data
-
-def convert_pdb_to_mrc(pdb_name, apix, res):
-    """
-    Convert a PDB file to MRC format using EMAN2's e2pdb2mrc.py script.
-
-    :param str pdb_name: The name of the PDB to be converted.
-    :param float apix: The pixel size used in the conversion.
-    :param int res: The resolution to be used in the conversion.
-
-    :return int: The mass extracted from the e2pdb2mrc.py script output.
-
-    This function writes a .pdb file to the disk.
-    """
-    print_and_log("", logging.DEBUG)
-    print_and_log(f"[{pdb_name}] Converting PDB to MRC using EMAN2's e2pdb2mrc.py...")
-    cmd = ["e2pdb2mrc.py", "--apix", str(apix), "--res", str(res), "--center", f"{pdb_name}.pdb", f"{pdb_name}.mrc"]
-    output = subprocess.run(cmd, capture_output=True, text=True)
-    print_and_log(output, logging.DEBUG)
-    try:
-        # Attempt to extract the mass from the output
-        mass = int([line for line in output.stdout.split("\n") if "mass of" in line][0].split()[-2])
-    except IndexError:
-        # If the mass is not found in the output, set it to 0 and print a warning
-        mass = 0
-        print_and_log(f"[{pdb_name}]Warning: Mass not found for PDB. Setting mass to 0.", logging.WARNING)
-    return mass
 
 def read_mrc(mrc_path):
     """
@@ -2418,7 +2391,7 @@ def generate_projection_gpu(angle, volume_data_gpu, original_shape):
     # Apply affine transformation
     rotated_volume_gpu = cp_affine_transform(volume_data_gpu, rotation_matrix, offset=center - cp.dot(rotation_matrix, center), order=1)
 
-    # Project the rotated volume
+    # Project the rotated volume by summing along the z-axis
     projection_gpu = cp.sum(rotated_volume_gpu, axis=2)
 
     # Pad the projection back to the original shape
@@ -2447,7 +2420,7 @@ def generate_projection(angle, volume_data):
     # Apply affine transformation
     rotated_volume = affine_transform(trimmed_volume, rotation_matrix, offset=center - np.dot(rotation_matrix, center), order=1)
 
-    # Project the rotated volume
+    # Project the rotated volume by summing along the z-axis
     projection = np.sum(rotated_volume, axis=2)
 
     # Pad the projection back to the original shape
@@ -2982,6 +2955,8 @@ def filter_out_overlapping_particles(particle_locations, half_small_image_width)
     :return list_of_tuples: List of (x, y) coordinates of non-overlapping particle locations.
     """
     print_and_log("", logging.DEBUG)
+    if not particle_locations:
+        return []
 
     # Build a KDTree for the particle locations
     tree = KDTree(particle_locations)
@@ -3419,6 +3394,7 @@ def crop_particles_from_micrographs(structure_name, structure_set_name, box_size
       necessary coordinates for cropping.
     """
     print_and_log("", logging.DEBUG)
+    structure_name = structure_name if structure_name.isalnum() else structure_name.split('/')[-1].split('\\')[-1].rsplit('.', 1)[0]  # Strips file extension if the user inputted a local file
     structure_set_number = int(structure_set_name.split('_')[-1])
     context = f"[SS #{structure_set_number} | {structure_name}]"
     print_and_log(f"{context} Cropping particles...")
@@ -3499,6 +3475,11 @@ def process_single_micrograph(args, structures, line, total_structures, structur
     :return tuple: Number of particles projected, number of particles with saved coordinates.
     """
     print_and_log("", logging.DEBUG)
+
+    # Reseed the random number generators per process to ensure unique random numbers
+    seed = int.from_bytes(os.urandom(4), byteorder="little")
+    np.random.seed(seed)
+    random.seed(seed)
 
     # Parse the 'micrograph_name.mrc defocus' line
     fname, defocus = line.strip().split()[:2]
@@ -3718,7 +3699,7 @@ def generate_micrographs(args, structure_set, structure_set_index, total_structu
     """
     print_and_log("", logging.DEBUG)
 
-    # Create a new directory for this structure set (e.g., structure_set_1, structure_set_2)
+    # Create a new directory for this structure set
     structure_set_name = f"structure_set_{structure_set_index + 1}"
     context = f"[SS #{structure_set_index + 1}]"
     os.makedirs(structure_set_name, exist_ok=True)
@@ -3732,10 +3713,9 @@ def generate_micrographs(args, structure_set, structure_set_index, total_structu
     box_sizes = []
 
     # Process and download structures, convert PDBs, and estimate masses
-    structures = []
-
     # Iterate over the structure_set, which may contain single structures or multiple structures
-    tasks = []  # List to hold tasks for parallel processing
+    structures = []
+    tasks = []  # Parallel processing tasks
     with ProcessPoolExecutor(max_workers=args.cpus) as executor:
         for structure_input in structure_set:
             if isinstance(structure_input, list):
@@ -3766,13 +3746,11 @@ def generate_micrographs(args, structure_set, structure_set_index, total_structu
         :return list: A list of structure names as strings for printing.
         """
         formatted_list = []
-        # Iterate over the structure_set, which may contain single structures or multiple structures
+        # Iterate over the structure_set, which may contain single or multiple structures
         for structure_input in structure_set:
-            if isinstance(structure_input, list):
-                # Handle multiple structures per micrograph (list of lists)
+            if isinstance(structure_input, list):  # Handle multiple structures per micrograph (list of lists)
                 formatted_list.extend([str(sub_structure) for sub_structure in structure_input])
-            else:
-                # Handle single structure per micrograph
+            else:  # Handle single structure per micrograph
                 formatted_list.append(str(structure_input))
         return formatted_list
 
