@@ -285,57 +285,29 @@ def convert_color_to_rgb(color):
     :param str or list color: Color name or list of RGB values.
     :return tuple: RGB values as integers (0-255).
     """
-    color_map = {
-        'red': (255, 0, 0),
-        'green': (0, 255, 0),
-        'blue': (0, 0, 255),
-        'yellow': (255, 255, 0),
-        'cyan': (0, 255, 255),
-        'magenta': (255, 0, 255),
-        'white': (255, 255, 255),
-        'black': (0, 0, 0),
-        'gray': (128, 128, 128),
-        'orange': (255, 165, 0),
-        'purple': (128, 0, 128),
-        'pink': (255, 192, 203),
-        'brown': (165, 42, 42),
-        'navy': (0, 0, 128),
-        'teal': (0, 128, 128),
-        'maroon': (128, 0, 0),
-        'olive': (128, 128, 0),
-        'lime': (0, 255, 0),
-        'aqua': (0, 255, 255),
-        'silver': (192, 192, 192),
-        'indigo': (75, 0, 130),
-        'violet': (238, 130, 238),
-        'turquoise': (64, 224, 208),
-        'coral': (255, 127, 80),
-        'gold': (255, 215, 0),
-        'salmon': (250, 128, 114),
-        'khaki': (240, 230, 140),
-        'plum': (221, 160, 221),
-        'crimson': (220, 20, 60),
-        'lavender': (230, 230, 250),
-        'beige': (245, 245, 220),
-        'ivory': (255, 255, 240),
-        'mint': (189, 252, 201),
-        'forest_green': (34, 139, 34),
-        'royal_blue': (65, 105, 225),
-        'dark_red': (139, 0, 0),
-        'sky_blue': (135, 206, 235),
-        'hot_pink': (255, 105, 180),
-        'sea_green': (46, 139, 87),
-        'steel_blue': (70, 130, 180),
-        'sienna': (160, 82, 45),
-        'tan': (210, 180, 140),
-        'dark_violet': (148, 0, 211),
-        'firebrick': (178, 34, 34),
-        'midnight_blue': (25, 25, 112),
-        'rosy_brown': (188, 143, 143),
-        'light_coral': (240, 128, 128),
-    }
+    print_and_log("", logging.DEBUG)
+    color_map = dict(
+        red=(255,0,0), green=(0,255,0), blue=(0,0,255),
+        yellow=(255,255,0), cyan=(0,255,255), magenta=(255,0,255),
+        white=(255,255,255), black=(0,0,0), gray=(128,128,128),
+        orange=(255,165,0), purple=(128,0,128), pink=(255,192,203),
+        brown=(165,42,42), navy=(0,0,128), teal=(0,128,128),
+        maroon=(128,0,0), olive=(128,128,0), lime=(0,255,0),
+        aqua=(0,255,255), silver=(192,192,192), indigo=(75,0,130),
+        violet=(238,130,238), turquoise=(64,224,208), coral=(255,127,80),
+        gold=(255,215,0), salmon=(250,128,114), khaki=(240,230,140),
+        plum=(221,160,221), crimson=(220,20,60), lavender=(230,230,250),
+        beige=(245,245,220), ivory=(255,255,240), mint=(189,252,201),
+        forest_green=(34,139,34), royal_blue=(65,105,225), dark_red=(139,0,0),
+        sky_blue=(135,206,235), hot_pink=(255,105,180), sea_green=(46,139,87),
+        steel_blue=(70,130,180), sienna=(160,82,45), tan=(210,180,140),
+        dark_violet=(148,0,211), firebrick=(178,34,34), midnight_blue=(25,25,112),
+        rosy_brown=(188,143,143), light_coral=(240,128,128),
+    )
 
-    if isinstance(color, str):
+    if color == 'random' or color == 'r':
+        return random.choice(list(color_map.values()))
+    elif isinstance(color, str):
         color = color.lower()
         if color in color_map:
             return color_map[color]
@@ -344,7 +316,7 @@ def convert_color_to_rgb(color):
     elif isinstance(color, list) and len(color) == 3:
         return tuple(map(int, color))
     else:
-        raise ValueError("Color must be a valid color name or a list of 3 RGB values (0-255)")
+        raise ValueError("Color must be a valid color name, a list of 3 RGB values (0-255), or 'random'")
 
 def validate_positive_int(parser, arg_name, value):
     """
@@ -432,6 +404,7 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-D", "--distribution", type=str, choices=['m', 'micrograph', 'g', 'gaussian', 'c', 'circular', 'ic', 'inverse_circular', 'r', 'random', 'n', 'non_random'], default='micrograph', help="Distribution type for generating particle locations: 'random' (or 'r') and 'non_random' (or 'n'). random is a random selection from a uniform 2D distribution. non_random selects from 4 distributions that can alternatively be requested directly: 1) 'micrograph' (or 'm') to mimic ice thickness (darker areas = more particles), 2) 'gaussian' (or 'g') clumps, 3) 'circular' (or 'c'), and 4) 'inverse_circular' (or 'ic'). Default is %(default)s which selects a distribution per micrograph based on internal weights.")
     particle_micrograph_group.add_argument("-aa", "--aggregation_amount", nargs='+', default=['low', 'random'], help="Amount of particle aggregation. Aggregation amounts can be set per-run or per-micrograph. To set per-run, input 0-10, 'low', 'medium', 'high', or 'random'. To set multiple aggregation amounts that will be chose randomly per-micrograph, input combinations like 'low medium', 'low high', '2 5', or 'low 3 9 10'. To set random aggregation amounts within a range, append any word input combination with 'random', like 'random random' to give the full range, or 'low medium random' to give a range from 0 to 6.7. Abbreviations work too, like '3.2 l h r'. Default is %(default)s")
     particle_micrograph_group.add_argument("-ao", "--allow_overlap", type=str, choices=['True', 'False', 'random'], default='random', help="Specify whether to allow overlapping particles. Options are 'True', 'False', or 'random'. Default is %(default)s")
+    particle_micrograph_group.add_argument("-ado", "--allowed_overlap", type=float, default=0.92, help="A factor related to how close non-overlapping particles can be when determining whether tosave their coordinates or not. Smaller = closer. Default is %(default)s, which was heuristically determined to work for globular proteins.")
     particle_micrograph_group.add_argument("-nl", "--num_particle_layers", type=int, default=2, help="If overlapping particles is allowed, this is the number of overlapping particle layers allowed (soft condition, not strict. Used in determining the maximum number of particles that can be placed in a micrograph). Default is %(default)s")
     particle_micrograph_group.add_argument("-so", "--save_overlapping_coords", action="store_true", help="Save overlapping particle coordinates to output files. Default is to not save overlapping particle")
     particle_micrograph_group.add_argument("-B", "--border", type=int, default=-1, help="Minimum distance of center of particles from the image border. Default is %(default)s = reverts to half boxsize")
@@ -439,7 +412,7 @@ def parse_arguments(script_start_time):
     particle_micrograph_group.add_argument("-se", "--save_edge_coordinates", action="store_true", help="Save particle coordinates that are closer than --border or closer than half a particle box size (if --border is not specified) from the edge. Requires --no_edge_particles to be False or --border to be greater than or equal to half the particle box size.")
     # TBD: Need to make a new border distance value for which particles are saved based on distance from the borders
     #particle_micrograph_group.add_argument("-sb", "--save_border", type=int, default=None, help="Minimum distance from the image border required to save a particle's coordinates to the output files. Default is %(default)s, which will use the value of --border if specified, otherwise half of the particle box size.")
-    #particle_micrograph_group.add_argument("--save_only_obscured_particles", action='store_true', help="Save only overlapping particles and within the junk masks.")
+    #particle_micrograph_group.add_argument("-soo", "--save_only_obscured_particles", action='store_true', help="Save only overlapping particles and within the junk masks.")
 
     # Simulation Options
     simulation_group = parser.add_argument_group('\033[1mSimulation Options\033[0m')
@@ -489,7 +462,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-3", "--view_in_3dmod", action='store_true', help="View generated micrographs in 3dmod at the end of the run")
     output_group.add_argument("-3r", "--imod_circle_radius", type=int, default=10, help="Radius of the circle drawn in IMOD .mod files. Default is %(default)s")
     output_group.add_argument("-3t", "--imod_circle_thickness", type=int, default=2, help="Thickness of the circular line drawn in IMOD .mod files. Default is %(default)s")
-    output_group.add_argument("-3c", "--imod_circle_color", nargs='+', default='green', help="Color of the circle drawn in IMOD .mod files. Can be a color name (e.g. 'red', 'green', 'blue') or three RGB values (0-255). Default is %(default)s")
+    output_group.add_argument("-3c", "--imod_circle_color", nargs='+', default='green', help="Color of the circle drawn in IMOD .mod files. Can be a color name (e.g. 'red', 'green', 'blue'), three RGB values (0-255), or 'random'/'r' for a random color per structure. Default is %(default)s")
 
     # System and Program Options
     misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
@@ -640,12 +613,14 @@ def parse_arguments(script_start_time):
         args.allow_overlap_random = False
         args.allow_overlap = (args.allow_overlap == 'True')
 
-    if len(args.imod_circle_color) == 1:
+    if args.imod_circle_color == 'r' or args.imod_circle_color == 'random':
+        args.imod_circle_color = 'random'
+    elif len(args.imod_circle_color) == 1:
         args.imod_circle_color = args.imod_circle_color[0]  # It's a color name
     elif len(args.imod_circle_color) == 3:
         args.imod_circle_color = [int(v) for v in args.imod_circle_color]  # It's RGB values
     else:
-        raise ValueError("--imod_circle_color must be either a color name or exactly 3 RGB values")
+        raise ValueError("--imod_circle_color must be either a color name, exactly 3 RGB values, or 'random'/'r'")
 
     # Print all arguments for the user's information
     formatted_output = ""
@@ -1574,7 +1549,9 @@ def save_particle_coordinates(structure_name, particle_locations_with_orientatio
 
     # Save IMOD .mod files if requested
     if imod_coordinate_file:
-        write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod", imod_circle_radius, imod_circle_thickness, structure_name, imod_circle_color)
+        # Use the color for this specific structure
+        color = imod_circle_color if isinstance(imod_circle_color, tuple) else convert_color_to_rgb(imod_circle_color)
+        write_mod_file(particle_locations, os.path.splitext(output_path)[0] + ".mod", imod_circle_radius, imod_circle_thickness, structure_name, color)
 
     # Save .coord files if requested
     if coord_coordinate_file:
@@ -2178,7 +2155,7 @@ def trim_vol_determine_particle_numbers(mrc_array, input_micrograph, scale_perce
     trimmed_mrc_array = mrc_array[min_indices[0]:max_indices[0], min_indices[1]:max_indices[1], min_indices[2]:max_indices[2]]
 
     # Set the maximum number of particle projections that can fit in the image
-    max_num_particles_without_overlap = int(2 * input_micrograph.shape[0] * input_micrograph.shape[1] / (trimmed_mrc_array.shape[0] * trimmed_mrc_array.shape[1]))
+    max_num_particles_without_overlap = int(2 * input_micrograph.shape[0] * input_micrograph.shape[1] / (trimmed_mrc_array.shape[0] * trimmed_mrc_array.shape[1]) / (scale_percent/100))
 
     # Determine max_num_particles based on whether overlap is allowed
     if allow_overlap:
@@ -2606,13 +2583,14 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
                                 border_distance, no_edge_particles, dist_type, non_random_dist_type, 
                                 aggregation_amount, allow_overlap):
     """
-    Generate random/non-random locations for particles from multiple structures within an image.
+    Generate random/non-random locations for particles from multiple structures within an image,
+    with optional aggregation in the 'micrograph' distribution type.
 
     Particles from multiple structures are placed without overlaps (if not allowed) across all structures.
     The size of each structure (represented by `half_small_image_width`) is taken into account when placing particles.
 
     :param numpy_array micrograph_image: Micrograph image (used only in the 'micrograph' distribution option).
-    :param tuple image_size: The size of the image as a tuple (width, height).
+    :param tuple image_size: The size of the image as a tuple (height, width).
     :param list num_particles_per_structure: A list containing the number of particles for each structure.
     :param list half_small_image_widths: A list containing half the widths of the particles for each structure.
     :param int border_distance: The minimum distance between particles and the image border.
@@ -2629,13 +2607,15 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
 
     # Initialize list for storing particle locations for each structure
     all_particle_locations = [[] for _ in range(len(num_particles_per_structure))]
-    global_particle_locations = []  # List to keep track of all particle positions regardless of structure
 
-    # Adjust border distance
+    # Adjust border distance for each structure
     if no_edge_particles:
         border_distances = [max(border_distance, hsw) for hsw in half_small_image_widths]
     else:
         border_distances = [0 for _ in half_small_image_widths]  # Minimum border distance is 0
+
+    # Compute the maximum half_small_image_width for overlap checking
+    max_half_small_image_width = max(half_small_image_widths)
 
     # Step 1: Calculate the total number of particles across all structures
     total_particles = sum(num_particles_per_structure)
@@ -2645,6 +2625,9 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
     # We will generate extra candidates to account for overlap rejections
     candidate_multiplier = 1.5 if not allow_overlap else 1.0  # Generate more candidates if overlaps are not allowed
     num_candidates = int(total_particles * candidate_multiplier)
+
+    # Initialize inverse_normalized_prob_map to None
+    inverse_normalized_prob_map = None
 
     # Generate positions based on the distribution type
     if dist_type == 'random':
@@ -2665,7 +2648,13 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
             # Exclude a circular region in the center
             exclusion_center = (width // 2, height // 2)
             exclusion_radius = min(width, height) * 0.3  # Adjust as needed
-            max_radius = np.hypot(width, height)
+
+            # Compute max_radius as the maximum distance from the exclusion_center to the image corners
+            corners = [(0, 0), (0, height - 1), (width - 1, 0), (width - 1, height - 1)]
+            distances = [np.hypot(exclusion_center[0] - x, exclusion_center[1] - y) for x, y in corners]
+            max_radius = max(distances)
+
+            # Generate positions in an annular region between exclusion_radius and max_radius
             angles = np.random.uniform(0, 2 * np.pi, num_candidates)
             radii = np.sqrt(np.random.uniform(exclusion_radius**2, max_radius**2, num_candidates))
             x_coords = exclusion_center[0] + radii * np.cos(angles)
@@ -2705,6 +2694,31 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
             y_coords, x_coords = np.unravel_index(indices, prob_map.shape)
             candidate_positions = np.column_stack((x_coords, y_coords))
 
+            # Apply aggregation if aggregation_amount > 0
+            if aggregation_amount > 0:
+                # Initialize clump centers
+                num_clumps = max(1, int(total_particles * np.random.uniform(0.1, 0.5)))
+                clump_centers = np.array([
+                    (
+                        np.random.randint(0, width),
+                        np.random.randint(0, height)
+                    ) for _ in range(num_clumps)
+                ])
+
+                # Adjust candidate positions closer to clump centers
+                aggregation_factor = aggregation_amount / 11.0  # As per single-structure version
+
+                for idx in range(len(candidate_positions)):
+                    x, y = candidate_positions[idx]
+                    clump_center = clump_centers[np.random.choice(len(clump_centers))]
+                    shift_x = int((clump_center[0] - x) * aggregation_factor)
+                    shift_y = int((clump_center[1] - y) * aggregation_factor)
+                    # To make it so clumps aren't universal attractors, only update the particle location if
+                    # aggregation_factor is less than a random number (i.e., use this as a probability of changing)
+                    if np.random.random() <= aggregation_factor:
+                        candidate_positions[idx, 0] = x + shift_x
+                        candidate_positions[idx, 1] = y + shift_y
+
             # Generate the inverse normalized probability map for output
             inverse_normalized_prob_map = 0.8 + 0.4 * (1 - (prob_map - prob_map.min()) / (prob_map.max() - prob_map.min()))
         else:
@@ -2719,64 +2733,80 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
         if x < 0 or x >= width or y < 0 or y >= height:
             continue
 
-        # Check border distance for each structure based on the largest half_small_image_width
-        max_hsw = max(half_small_image_widths)
-        border_dist = max(border_distance, max_hsw) if no_edge_particles else 0
-        if x < border_dist or x > width - border_dist or y < border_dist or y > height - border_dist:
+        # Use the minimum border distance across structures to ensure positions are valid
+        min_border_dist = min(border_distances)
+        if x < min_border_dist or x >= width - min_border_dist or y < min_border_dist or y >= height - min_border_dist:
             continue
 
         valid_candidates.append((x, y))
 
-    # Step 4: If overlaps are not allowed, use KDTree to filter out overlapping particles
-    if not allow_overlap:
-        # Start placing particles, checking for overlaps as we go
-        particle_counts = [0] * len(num_particles_per_structure)
+    if not valid_candidates:
+        print_and_log("Warning: No valid candidate positions found for particles.", logging.WARNING)
+        # Return empty lists
+        if dist_type == 'non_random' and non_random_dist_type == 'micrograph':
+            return [[] for _ in num_particles_per_structure], inverse_normalized_prob_map
+        else:
+            return [[] for _ in num_particles_per_structure], None
+
+    valid_candidates = np.array(valid_candidates)
+
+    # Step 4: Assign candidate positions to structures
+    particle_counts = [0] * len(num_particles_per_structure)
+    total_required_particles = sum(num_particles_per_structure)
+    candidate_idx = 0
+
+    if allow_overlap:
+        # Overlaps are allowed between all particles
+        # Assign positions without overlap checks
         structure_indices = list(range(len(num_particles_per_structure)))
-        structure_allocations = []
-
-        # Build a KDTree for efficient overlap checking
-        placed_positions = []
-        total_required_particles = sum(num_particles_per_structure)
-        candidate_idx = 0
-
-        while len(placed_positions) < total_required_particles and candidate_idx < len(valid_candidates):
-            x, y = valid_candidates[candidate_idx]
-
-            # Check overlap with existing particles
-            if placed_positions:
-                tree = KDTree(placed_positions)
-                distances, _ = tree.query([(x, y)], k=1)
-                min_distance = min(half_small_image_widths) * 0.9  # Adjust the factor as needed
-                if distances[0] < min_distance:
-                    candidate_idx +=1
-                    continue  # Overlaps with existing particle
-
-            # Assign particle to structures in round-robin fashion based on remaining counts
+        while candidate_idx < len(valid_candidates) and sum(particle_counts) < total_required_particles:
             for s_idx in structure_indices:
                 if particle_counts[s_idx] < num_particles_per_structure[s_idx]:
-                    all_particle_locations[s_idx].append((x, y))
-                    particle_counts[s_idx] += 1
-                    placed_positions.append((x, y))
-                    break
-            candidate_idx +=1
-
-        # Update the total placed particles
-        placed_particles = sum(particle_counts)
-
-    else:
-        # If overlaps are allowed, distribute positions to structures
-        # Round-robin assignment to structures
-        candidate_idx = 0
-        particle_counts = [0] * len(num_particles_per_structure)
-        total_required_particles = sum(num_particles_per_structure)
-        while candidate_idx < len(valid_candidates) and sum(particle_counts) < total_required_particles:
-            for s_idx in range(len(num_particles_per_structure)):
-                if particle_counts[s_idx] < num_particles_per_structure[s_idx]:
-                    all_particle_locations[s_idx].append(valid_candidates[candidate_idx])
-                    particle_counts[s_idx] += 1
-                    candidate_idx +=1
+                    x, y = valid_candidates[candidate_idx]
+                    # Check if the position is within the required border distance for this structure
+                    border_dist = border_distances[s_idx]
+                    if x >= border_dist and x < width - border_dist and y >= border_dist and y < height - border_dist:
+                        all_particle_locations[s_idx].append((x, y))
+                        particle_counts[s_idx] += 1
+                    candidate_idx += 1
                     if candidate_idx >= len(valid_candidates):
                         break
+            if candidate_idx >= len(valid_candidates):
+                break
+    else:
+        # Overlaps are not allowed within the same structure
+        # Overlaps between particles of different structures are allowed
+        # Initialize per-structure placed positions
+        placed_positions_list = [[] for _ in range(len(num_particles_per_structure))]
+
+        structure_indices = list(range(len(num_particles_per_structure)))
+        while candidate_idx < len(valid_candidates) and sum(particle_counts) < total_required_particles:
+            x, y = valid_candidates[candidate_idx]
+            candidate_assigned = False  # Flag to determine if candidate was assigned
+
+            # Try to assign the candidate to structures in a round-robin fashion
+            for s_idx in structure_indices:
+                if particle_counts[s_idx] < num_particles_per_structure[s_idx]:
+                    # Check if the position is within the required border distance for this structure
+                    border_dist = border_distances[s_idx]
+                    if x < border_dist or x >= width - border_dist or y < border_dist or y >= height - border_dist:
+                        continue  # Invalid position for this structure
+
+                    # Check overlap with existing particles of the same structure
+                    if placed_positions_list[s_idx]:
+                        tree = KDTree(placed_positions_list[s_idx])
+                        distances, _ = tree.query([(x, y)], k=1)
+                        min_distance = half_small_image_widths[s_idx] * 0.9  # Adjust the factor as needed
+                        if distances[0] < min_distance:
+                            continue  # Overlaps with existing particle of the same structure
+
+                    # Proceed to assign the particle to the structure
+                    all_particle_locations[s_idx].append((x, y))
+                    particle_counts[s_idx] += 1
+                    placed_positions_list[s_idx].append((x, y))
+                    candidate_assigned = True
+                    break  # Candidate assigned to a structure
+            candidate_idx += 1
 
     if dist_type == 'non_random' and non_random_dist_type == 'micrograph':
         return all_particle_locations, inverse_normalized_prob_map
@@ -3045,12 +3075,13 @@ def apply_ctfs_with_eman2(particles, defocuses, ampcont, bfactor, apix, cs, volt
     particles_CTF = np.array(results, dtype=np.float32)
     return particles_CTF
 
-def filter_out_overlapping_particles(particle_locations, half_small_image_width):
+def filter_out_overlapping_particles(particle_locations, half_small_image_width, allowed_overlap):
     """
     Filter out overlapping particles based on the center-to-center distance.
 
     :param list_of_tuples particle_locations: List of (x, y) coordinates of particle locations.
     :param int half_small_image_width: Half the width of a small image.
+    :param float allowed_overlap: Fudge factor for determining how close non-overlapping particles can be.
     :return list_of_tuples: List of (x, y) coordinates of non-overlapping particle locations.
     """
     print_and_log("", logging.DEBUG)
@@ -3060,8 +3091,8 @@ def filter_out_overlapping_particles(particle_locations, half_small_image_width)
     # Build a KDTree for the particle locations
     tree = KDTree(particle_locations)
 
-    # Define the minimum distance required to avoid overlap (0.92 is a fudge factor)
-    min_distance = 0.92 * half_small_image_width
+    # Define the minimum distance required to avoid overlap
+    min_distance = allowed_overlap * half_small_image_width
 
     # Find all pairs of particles that are closer than min_distance
     overlapping_particles = set()
@@ -3171,6 +3202,9 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     json_scale = junk_labels_options['json_scale']
     polygon_expansion_distance = junk_labels_options['polygon_expansion_distance']
 
+    # Misc options
+    allowed_overlap = particle_and_micrograph_generation_options['allowed_overlap']
+
     # Initialize filtered particle locations for all structures
     filtered_all_particle_locations = []
 
@@ -3228,7 +3262,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
     for i, particle_locations in enumerate(final_particle_locations):
         if not particle_and_micrograph_generation_options['save_overlapping_coords']:
             half_small_image_width = input_options['half_small_image_widths'][i]
-            filtered_particle_locations = filter_out_overlapping_particles(particle_locations, half_small_image_width)
+            filtered_particle_locations = filter_out_overlapping_particles(particle_locations, half_small_image_width, allowed_overlap)
             num_particles_removed = len(particle_locations) - len(filtered_particle_locations)
             if num_particles_removed > 0:
                 print_and_log(f"{context} {num_particles_removed} overlapping particle{'' if num_particles_removed == 1 else 's'} removed for {structure_names[i]}.")
@@ -3278,7 +3312,7 @@ def blend_images(input_options, particle_and_micrograph_generation_options, simu
         structure_particle_locations_with_orientations = [(loc, ori) for loc, ori in zip(final_filtered_particle_locations[i], all_orientations[i])]
         save_particle_coordinates(structure_name, structure_particle_locations_with_orientations, output_paths[i], output_options['output_file_path'],
                                   output_options['imod_coordinate_file'], output_options['coord_coordinate_file'], defocus,
-                                  output_options['imod_circle_radius'], output_options['imod_circle_thickness'], output_options['imod_circle_color'])
+                                  output_options['imod_circle_radius'], output_options['imod_circle_thickness'], output_options['imod_circle_color'][i])
         # Track the number of saved particles for this structure
         num_particles_saved_per_structure.append(len(structure_particle_locations_with_orientations))
 
@@ -3706,7 +3740,8 @@ def process_single_micrograph(args, structures, line, total_structures, structur
         'gaussian_variance': gaussian_variance,
         'aggregation_amount': aggregation_amount_val,
         'allow_overlap': args.allow_overlap,
-        'save_overlapping_coords': args.save_overlapping_coords
+        'save_overlapping_coords': args.save_overlapping_coords,
+        'allowed_overlap': args.allowed_overlap
     }
     simulation_options = {'scale': ice_thickness}
     junk_labels_options = {
@@ -3728,7 +3763,7 @@ def process_single_micrograph(args, structures, line, total_structures, structur
         'output_paths': [f"{structure_set_name}/{fname}_{structure[0]}{repeat_suffix}" for structure in structures],
         'imod_circle_radius': args.imod_circle_radius,
         'imod_circle_thickness': args.imod_circle_thickness,
-        'imod_circle_color': convert_color_to_rgb(args.imod_circle_color)
+        'imod_circle_color': [convert_color_to_rgb('random') if args.imod_circle_color == 'random' else args.imod_circle_color for _ in structures]
     }
 
     num_particles_projected, num_particles_saved_per_structure = add_images(
