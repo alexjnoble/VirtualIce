@@ -2248,8 +2248,6 @@ def determine_ice_and_particle_behavior(args, structure, structure_name, microgr
                 # Reduce the number of particles because the maximum was calculated based on the maximum number of particles that will fit in the micrograph side-by-side
                 num_particles = max(num_particles // 4, 2)
 
-    print_and_log(f"{context} {num_particles} particles of {structure_name} will be added to the micrograph")
-
     if args.aggregation_amount:
         if not remaining_aggregation_amounts:
             remaining_aggregation_amounts = list(args.aggregation_amount)
@@ -3658,6 +3656,8 @@ def process_single_micrograph(args, structures, line, total_structures, structur
         ice_thickness, ice_thickness_printout, num_particles, dist_type, non_random_dist_type, aggregation_amount_val = determine_ice_and_particle_behavior(
             args, structure, structure_name, micrograph, ice_scaling_fudge_factor, remaining_aggregation_amounts, context
         )
+        num_particles = num_particles // len(structures)  # Evenly divide the total number of particles amongst the structures in the set
+        print_and_log(f"{context} {num_particles} particles of {structure_name} will be added to the micrograph")
 
         # Store the number of particles for this structure
         num_particles_per_structure.append(num_particles)
