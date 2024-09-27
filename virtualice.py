@@ -2673,7 +2673,7 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
             candidate_positions = np.array(candidate_positions)
         elif non_random_dist_type == 'micrograph':
             # Use the micrograph to generate a probability map
-            sigma = min(width, height) / 4  # Adjust as needed
+            sigma = min(width, height) / 1  # Need to divide by something otherwise it breaks
             itk_image = sitk.GetImageFromArray(micrograph_image)
             filtered_micrograph_itk = sitk.SmoothingRecursiveGaussian(itk_image, sigma=sigma)
             filtered_micrograph = sitk.GetArrayFromImage(filtered_micrograph_itk)
@@ -2704,7 +2704,7 @@ def generate_particle_locations(micrograph_image, image_size, num_particles_per_
                 ])
 
                 # Adjust candidate positions closer to clump centers
-                aggregation_factor = aggregation_amount / 11.0  # As per single-structure version
+                aggregation_factor = aggregation_amount / 11.0
 
                 for idx in range(len(candidate_positions)):
                     x, y = candidate_positions[idx]
