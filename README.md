@@ -45,18 +45,22 @@ VirtualIce requires Python 3, EMAN2, IMOD, and several dependencies, which can b
 pip install cupy gpustat mrcfile numpy opencv-python pandas scipy SimpleITK
 ```
 
-To use VirtualIce, clone the github directory, make virtualice.py executable (`chmod +x virtualice.py`), and ensure virtualice.py is in your environment for use.
+To use VirtualIce, clone the github directory, make virtualice.py executable (`chmod +x virtualice.py`), download the ice_images/ directory from EMPIAR-12287 to the VirtualIce/ice_images/ directory, and ensure virtualice.py is in your environment for use.
 
 ## Examples
 
-### Example 1 (T20S Proteasome; PDB 1PMA, 616 kDa):
+
+### Example 1 (top-left: PDB 1TIM, 53 kDa, top-right: [1DAT, 442 kDa, 7ZP8, 1385 kDa, and 2HCO, 65 kDa], bottom-left: 1RUZ, 165 kDa, bottom-right: 1PMA, 686 kDa):
 ![Example 1](example_images/VirtualIce_example1.png)
 
-### Example 2 (Triose Phosphate Isomerase; PDB 1TIM, 53 kDa):
+### Example 2 (T20S Proteasome; PDB 1PMA, 686 kDa):
 ![Example 2](example_images/VirtualIce_example2.png)
 
-### Example 3 (TRPV5; EMD 0594, 306 kDa):
+### Example 3 (Triose Phosphate Isomerase; PDB 1TIM, 53 kDa):
 ![Example 3](example_images/VirtualIce_example3.png)
+
+### Example 4 (TRPV5; EMD 0594, 306 kDa):
+![Example 4](example_images/VirtualIce_example4.png)
 
 ## Usage
 
