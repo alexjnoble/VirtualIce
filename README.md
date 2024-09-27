@@ -5,18 +5,24 @@ VirtualIce is a feature-rich half-synthetic cryoEM micrograph generator that use
 
 ## Release Notes
 
-### v2.0.0beta - September 19, 2024
+### v2.0.0 - September 27, 2024
 
 #### Features
 
-- Multiple structures per micrograph can now be requested (structure sets).
+   - Various bug fixes and version release.
+
+<details><summary>v2.0.0beta - September 19, 2024</summary><p>
+ 
+   - Multiple structures per micrograph can now be requested (structure sets).
   - Use the same --structures flag followed by either a single structure or multiple. Supports any number of structure sets, like this: 
     - virtualice.py -s 1TIM [1PMA, 50882] [my_structure1.mrc, 3DRE, 6TIM]
   - The above command will make one set of micrographs with only PDB 1TIM, another set with PDB 1PMA and EMD-50882, and another set with a local file (my_structure1.mrc), PDB 3DRE, and PDB 6TIM.
   - Preferred orientation, particle distributions, and overlapping & aggregated particles are fully supported.
   - Filtering of edge, overlapping, and obscured particles is fully supported.
    - Coordinate files are saved independently in .star, .mod, and/or .coord files (one per structure in a structure set).
-- This update is significant because it allows for ground-truth datasets of heterogeneous proteins - e.g. continuous or discrete conformations, compositional heterogeneity, or completely different proteins.
+  - This update is significant because it allows for ground-truth datasets of heterogeneous proteins - e.g. continuous or discrete conformations, compositional heterogeneity, or completely different proteins.
+
+</p></details>
 
 <details><summary>v1.0.1 - September 19, 2024</summary><p>
  
