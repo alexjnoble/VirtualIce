@@ -22,7 +22,7 @@
 # IMOD source code & packages: https://bio3d.colorado.edu/imod/
 #
 # Ensure compliance with license terms when obtaining and using EMAN2 & IMOD.
-__version__ = "2.0.0beta"
+__version__ = "2.0.0"
 
 import os
 import re
@@ -456,7 +456,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-J", "--jpeg", action="store_true", help="Save micrographs as .jpeg")
     output_group.add_argument("-Q", "--jpeg_quality", type=int, default=95, help="Quality of saved .jpeg images (0 to 100). Default is %(default)s")
     output_group.add_argument("-b", "--binning", type=check_binning, default=1, help="Bin/Downsample the micrographs by Fourier cropping after superimposing particle projections. Binning is the sidelength divided by this factor (e.g. -b 4 for a 4k x 4k micrograph will result in a 1k x 1k micrograph) (e.g. -b 1 is unbinned). Default is %(default)s")
-    output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default")
+    output_group.add_argument("-k", "--keep", action="store_true", help="Keep the non-downsampled micrographs if downsampling is requested. Non-downsampled micrographs are deleted by default. Flag is currently forced to True until bug is fixed.")
     output_group.add_argument("-I", "--imod_coordinate_file", action="store_true", help="Also output one IMOD .mod coordinate file per micrograph. Note: IMOD must be installed and working")
     output_group.add_argument("-O", "--coord_coordinate_file", action="store_true", help="Also output one .coord coordinate file per micrograph")
     output_group.add_argument("-3", "--view_in_3dmod", action='store_true', help="View generated micrographs in 3dmod at the end of the run")
@@ -504,6 +504,9 @@ def parse_arguments(script_start_time):
     setup_logging(script_start_time, args.verbosity)
 
     args.structures = parse_structure_input(args.structures)
+
+    if args.binning != 1:
+        args.keep = True  # Hardcoded until bug is fixed.
 
     # Determine if GPU should be used
     args.use_gpu = not args.use_cpu and gpu_available
@@ -2051,7 +2054,7 @@ def downsample_coord_file(input_coord, output_coord, downsample_factor):
                 # Write the downsampled coordinates to the output file
                 outfile.write(f"{x:.2f} {y:.2f}\n")
 
-def downsample_coordinate_files(structure_name, structure_set_name, binning, imod_coordinate_file, coord_coordinate_file):
+def downsample_coordinate_files(structure_name, structure_set_name, binning, imod_coordinate_file, coord_coordinate_file, circle_radius, circle_thickness, circle_color):
     """
     Downsample coordinate files based on the specified binning factor.
 
@@ -2060,6 +2063,9 @@ def downsample_coordinate_files(structure_name, structure_set_name, binning, imo
     :param int binning: The factor by which to downsample the coordinates.
     :param bool imod_coordinate_file: Whether to downsample and save IMOD .mod coordinate files.
     :param bool coord_coordinate_file: Whether to downsample and save .coord coordinate files.
+    :param int circle_radius: Radius of the circle to be drawn at each particle location.
+    :param int circle_thickness: Thickness of the circular line drawn in IMOD .mod files.
+    :param tuple circle_color: RGB color values for the circle (0-255).
     """
     print_and_log("", logging.DEBUG)
     downsample_star_file(f"{structure_name}.star", f"{structure_name}_bin{binning}.star", binning)
@@ -2072,7 +2078,7 @@ def downsample_coordinate_files(structure_name, structure_set_name, binning, imo
                 downsample_point_file(input_file, output_point_file, binning)
                 # Then convert all of the .point files to .mod files
                 mod_file = os.path.splitext(output_point_file)[0] + ".mod"
-                convert_point_to_model(output_point_file, mod_file)
+                convert_point_to_model(output_point_file, mod_file, circle_radius, circle_thickness, structure_name, circle_color)
     if coord_coordinate_file:
         for filename in os.listdir(f"{structure_set_name}/"):
             if filename.endswith(".coord"):
@@ -3941,7 +3947,7 @@ def generate_micrographs(args, structure_set, structure_set_index, total_structu
         print_and_log(f"{context} Binning/Downsampling micrographs by {args.binning} by Fourier cropping...")
         parallel_downsample_micrographs(f"{structure_set_name}/", args.binning, args.apix, args.cpus, args.use_gpu, args.gpu_ids)
         for structure_name, _, _, _ in structures:
-            downsample_coordinate_files(structure_name, structure_set_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file)
+            downsample_coordinate_files(structure_name, structure_set_name, args.binning, args.imod_coordinate_file, args.coord_coordinate_file, args.imod_circle_radius, args.imod_circle_thickness, args.imod_circle_color)
     else:
         for structure_name, _, _, _ in structures:
             shutil.move(f"{structure_name}.star", f"{structure_set_name}/")
