@@ -68,7 +68,7 @@ To use VirtualIce, clone the github directory, make virtualice.py executable (`c
 ### Example 4 (TRPV5; EMD 0594, 306 kDa):
 ![Example 4](example_images/VirtualIce_example4.png)
 
-## Usage
+## User Guide
 
 The script can be run from the command line and takes a number of arguments.
 
