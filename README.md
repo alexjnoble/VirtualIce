@@ -155,6 +155,10 @@ If you encounter any problems or have any questions about the script, please [Su
 
 Contributions are welcome! Please open a [Pull Request](https://github.com/alexjnoble/VirtualIce/pulls) or [Issue](https://github.com/alexjnoble/VirtualIce/issues).
 
+## Reference
+
+For more details about the VirtualIce algorithm and its applications, see and reference the associated manuscript: [https://doi.org/10.1101/2024.09.28.615520](https://doi.org/10.1101/2024.09.28.615520)
+
 ## Author
 
 This script was written by Alex J. Noble with assistance from OpenAI's GPT, Anthropic's Claude, and Google's Gemini models, 2023-2024 at SEMC.
