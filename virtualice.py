@@ -462,7 +462,7 @@ def parse_arguments(script_start_time):
     output_group.add_argument("-3", "--view_in_3dmod", action='store_true', help="View generated micrographs in 3dmod at the end of the run")
     output_group.add_argument("-3r", "--imod_circle_radius", type=int, default=10, help="Radius of the circle drawn in IMOD .mod files. Default is %(default)s")
     output_group.add_argument("-3t", "--imod_circle_thickness", type=int, default=2, help="Thickness of the circular line drawn in IMOD .mod files. Default is %(default)s")
-    output_group.add_argument("-3c", "--imod_circle_color", nargs='+', default='green', help="Color of the circle drawn in IMOD .mod files. Can be a color name (e.g. 'red', 'green', 'blue'), three RGB values (0-255), or 'random'/'r' for a random color per structure. Default is %(default)s")
+    output_group.add_argument("-3c", "--imod_circle_color", nargs='+', default='green', help="Color of the circle drawn in IMOD .mod files. Can be a single color name (e.g. 'red', 'green', 'blue'), three RGB values (0-255), 'random'/'r' for a random color per structure, or a list of colors (one per structure) for multi-structure micrographs. Default is %(default)s")
 
     # System and Program Options
     misc_group = parser.add_argument_group('\033[1mSystem and Program Options\033[0m')
@@ -616,12 +616,45 @@ def parse_arguments(script_start_time):
         args.allow_overlap_random = False
         args.allow_overlap = (args.allow_overlap == 'True')
 
-    if args.imod_circle_color == 'r' or args.imod_circle_color == 'random':
-        args.imod_circle_color = 'random'
-    elif len(args.imod_circle_color) == 1:
-        args.imod_circle_color = args.imod_circle_color[0]  # It's a color name
-    elif len(args.imod_circle_color) == 3:
-        args.imod_circle_color = [int(v) for v in args.imod_circle_color]  # It's RGB values
+    print(type(args.imod_circle_color))
+    color_map = dict(
+        red=(255,0,0), green=(0,255,0), blue=(0,0,255),
+        yellow=(255,255,0), cyan=(0,255,255), magenta=(255,0,255),
+        white=(255,255,255), black=(0,0,0), gray=(128,128,128),
+        orange=(255,165,0), purple=(128,0,128), pink=(255,192,203),
+        brown=(165,42,42), navy=(0,0,128), teal=(0,128,128),
+        maroon=(128,0,0), olive=(128,128,0), lime=(0,255,0),
+        aqua=(0,255,255), silver=(192,192,192), indigo=(75,0,130),
+        violet=(238,130,238), turquoise=(64,224,208), coral=(255,127,80),
+        gold=(255,215,0), salmon=(250,128,114), khaki=(240,230,140),
+        plum=(221,160,221), crimson=(220,20,60), lavender=(230,230,250),
+        beige=(245,245,220), ivory=(255,255,240), mint=(189,252,201),
+        forest_green=(34,139,34), royal_blue=(65,105,225), dark_red=(139,0,0),
+        sky_blue=(135,206,235), hot_pink=(255,105,180), sea_green=(46,139,87),
+        steel_blue=(70,130,180), sienna=(160,82,45), tan=(210,180,140),
+        dark_violet=(148,0,211), firebrick=(178,34,34), midnight_blue=(25,25,112),
+        rosy_brown=(188,143,143), light_coral=(240,128,128),
+    )
+    if isinstance(args.imod_circle_color, str):
+        args.imod_circle_color = [args.imod_circle_color]
+
+    if isinstance(args.imod_circle_color, list):
+        if len(args.imod_circle_color) == 1:
+            # Single value provided (color name or 'random'/'r')
+            color_value = args.imod_circle_color[0]
+            if color_value in ['r', 'random']:
+                args.imod_circle_color = 'random'  # Will be converted to random colors per structure later
+            else:
+                args.imod_circle_color = color_value  # Single color name for all structures
+        elif all(len(rgb) == 3 for rgb in [args.imod_circle_color]) and all(str(v).isdigit() for v in args.imod_circle_color):
+            # Single RGB triplet provided
+            args.imod_circle_color = [int(v) for v in args.imod_circle_color]  # RGB values for all structures
+        else:
+            # Check if it's a list of color names or 'random'/'r'
+            for color in args.imod_circle_color:
+                if not (isinstance(color, str) and (color in ['r', 'random'] or color in color_map.keys())):
+                    raise ValueError("Each color must be either a color name, 'random'/'r', or part of a single RGB triplet")
+            # Keep the list of colors as is
     else:
         raise ValueError("--imod_circle_color must be either a color name, exactly 3 RGB values, or 'random'/'r'")
 
@@ -3769,7 +3802,7 @@ def process_single_micrograph(args, structures, line, total_structures, structur
         'output_paths': [f"{structure_set_name}/{fname}_{structure[0]}{repeat_suffix}" for structure in structures],
         'imod_circle_radius': args.imod_circle_radius,
         'imod_circle_thickness': args.imod_circle_thickness,
-        'imod_circle_color': [convert_color_to_rgb('random') if args.imod_circle_color == 'random' else args.imod_circle_color for _ in structures]
+        'imod_circle_color': [convert_color_to_rgb('random') if args.imod_circle_color == 'random' else convert_color_to_rgb(args.imod_circle_color[i] if isinstance(args.imod_circle_color, list) and len(args.imod_circle_color) == len(structures) else args.imod_circle_color) for i, _ in enumerate(structures)]
     }
 
     num_particles_projected, num_particles_saved_per_structure = add_images(
